@@ -1,4 +1,3 @@
-```markdown
 # Operativo Import Console
 
 This repository contains a PyQt5 application for uploading data to MongoDB, generating QR codes, and more.

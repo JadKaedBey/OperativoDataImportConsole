@@ -23,11 +23,10 @@ window_height = 800
 # Function to connect to MongoDB
 def connect_to_mongodb(username, password):
     global client
-    # Add your logic to connect to different MongoDB clusters based on username and password
     if username == "user1" and password == "password1":
-        client = MongoClient('mongodb+srv://michael:stegish@jadclu-ster.d4ppdse.mongodb.net/')
+        client = MongoClient('')
     elif username == "user2" and password == "password2":
-        client = MongoClient('mongodb+srv://michael:stegish@jadclu-ster.d4ppdse.mongodb.net/')
+        client = MongoClient('')
     else:
         return False
     return True

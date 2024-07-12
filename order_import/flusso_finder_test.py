@@ -1,6 +1,9 @@
 from pymongo import MongoClient
 import datetime
+import os
+from dotenv import load_dotenv
 
+load_dotenv()
 
 global client
 
@@ -187,7 +190,7 @@ def upload_order_to_db(order_object):
 
 
 # Example usage:
-client = MongoClient('mongodb+srv://jad:jad@demo.0p0q3ph.mongodb.net/?retryWrites=true&w=majority&appName=demo')  # Adjust the connection string as needed
+client = MongoClient(os.getenv("IMPORT_TEST_URI"))  
 
 prodId = "583583357"
 phases = get_procedure_phases_by_prodId(prodId)

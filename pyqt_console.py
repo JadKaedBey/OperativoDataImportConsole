@@ -36,7 +36,6 @@ def connect_to_mongodb(username, password):
     print(f"Attempting to connect with username: {username} and password: {password}")
     try:
         if username == "1" and password == "1":
-            # client = MongoClient('mongodb+srv://michael:stegish@jadclu-ster.d4ppdse.mongodb.net/', server_api=ServerApi('1'))
             client = MongoClient(os.getenv("IMPORT_TEST_URI"))
         elif username == "amade" and password == "amade":
             client = MongoClient(os.getenv("AMADE_URI"))
@@ -44,7 +43,6 @@ def connect_to_mongodb(username, password):
             client = MongoClient(os.getenv("MARCOLIN_URI"))
         elif username == "demo" and password == "demo":
             client = MongoClient(os.getenv("DEMO_URI"))
-            # hLI4i39ELcFVmwvw
         else:
             print("Invalid credentials")
             return False

@@ -1,6 +1,8 @@
 import pandas as pd
 from pymongo import MongoClient
 from bson import ObjectId
+from dotenv import load_dotenv
+import os
 
 def main():
     file_path = './OESSE_base_dati_rev0.xlsx'  # Updated to the actual file path
@@ -54,7 +56,7 @@ def read_excel(file_path, sheet_name):
 
 
 def upload_to_mongodb(data, db_name, collection_name):
-    client = MongoClient('mongodb+srv://amade_serverless:UH0GEayED87@amadeserverlesscluster.xavtarq.mongodb.net/?retryWrites=true&w=majority&appName=AMADEServerlessCluster')
+    client = MongoClient(os.getenv("AMADE_URI"))
  # Adjust the connection string as needed
   # Modify as needed
     db = client[db_name]

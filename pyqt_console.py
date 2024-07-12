@@ -7,7 +7,7 @@ import pandas as pd
 from pymongo import MongoClient
 from pymongo.server_api import ServerApi
 from math import floor
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 import qrcode
 import os
 import datetime
@@ -544,14 +544,15 @@ class MainWindow(QMainWindow):
             for document in collection.find():
                 name = document.get('nome', 'UnknownName')
                 surname = document.get('cognome', 'UnknownSurname')
-                object_id = str(document['_id'])
+                password = document.get('password', 'NoPassword')  # Assuming 'password' is the field name in your database
+                qr_data = f"{name}||{surname}||{password}"  # Format the data as required by the new QR code system
                 filename = f"{name}_{surname}.png"
-                self.generate_qr(object_id, filename)
+                self.generate_qr(qr_data, filename, name, surname)  # Pass the name and surname to the QR generation function
             QMessageBox.information(self, "QR Codes Generated", "QR codes have been successfully generated and saved in " + self.qr_save_path)
         except Exception as e:
             QMessageBox.critical(self, "Operation Failed", f"Failed to generate QR codes: {e}")
 
-    def generate_qr(self, data, filename):
+    def generate_qr(self, data, filename, name, surname):
         qr = qrcode.QRCode(
             version=1,
             error_correction=qrcode.constants.ERROR_CORRECT_L,
@@ -561,10 +562,38 @@ class MainWindow(QMainWindow):
         qr.add_data(data)
         qr.make(fit=True)
         img = qr.make_image(fill='black', back_color='white')
-        full_path = os.path.join(self.qr_save_path, filename)
-        img.save(full_path)
-    
 
+        # Convert to a format that allows drawing
+        img = img.convert("RGB")
+
+        # Define font and get a drawing context
+        font = ImageFont.load_default()  # You can specify a different font here
+        draw = ImageDraw.Draw(img)
+
+        # Text to add
+        text = f"{name} {surname}"
+
+        # Calculate text size and position
+        text_bbox = draw.textbbox((0, 0), text, font=font)
+        text_width = text_bbox[2] - text_bbox[0]
+        text_height = text_bbox[3] - text_bbox[1]
+        img_width, img_height = img.size
+        x = (img_width - text_width) // 2
+        y = img_height - text_height - 10  # 10 pixels above the bottom edge
+
+        # Create a new image with extra space for the text
+        new_img_height = img_height + text_height + 20  # Adding some padding
+        new_img = Image.new("RGB", (img_width, new_img_height), "white")
+        new_img.paste(img, (0, 0))
+
+        # Draw the text on the new image
+        draw = ImageDraw.Draw(new_img)
+        draw.text((x, img_height + 10), text, font=font, fill="black")
+
+        # Save the image
+        full_path = os.path.join(self.qr_save_path, filename)
+        new_img.save(full_path)
+        
 
     def generate_order_qr_codes(self):
         folder = QFileDialog.getExistingDirectory(self, "Select Folder")

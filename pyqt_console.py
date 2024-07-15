@@ -53,7 +53,7 @@ def connect_to_mongodb(username, password):
         return False
 
 def fetch_settings():
-    
+    global client
     db = client['azienda']
     collection = db['settings']
     
@@ -98,6 +98,8 @@ def find_start_date_of_phase(end_date, target_phase, quantity, open_time, holida
 
     pausa = datetime.timedelta(hours=pausa_pranzo['fine']['ore'], minutes=pausa_pranzo['fine']['minuti']) - \
             datetime.timedelta(hours=pausa_pranzo['inizio']['ore'], minutes=pausa_pranzo['inizio']['minuti'])
+    if isinstance(end_date, float):
+        return None
     minutes_in_day = datetime.timedelta(hours=end_date.hour, minutes=end_date.minute) - \
                      datetime.timedelta(hours=open_time['ore'], minutes=open_time['minuti']) - pausa
 
@@ -105,8 +107,8 @@ def find_start_date_of_phase(end_date, target_phase, quantity, open_time, holida
     for end_node in end_nodes:
         total_minutes = traverse_backwards(end_node)
         if total_minutes is not None:
-            whole_days = total_minutes // minutes_in_day.total_seconds() // 60
-            extra_minutes = total_minutes % minutes_in_day.total_seconds() // 60
+            whole_days = total_minutes // (minutes_in_day.total_seconds() // 60)
+            extra_minutes = total_minutes % (minutes_in_day.total_seconds() // 60)
 
             possible_date = end_date - datetime.timedelta(days=whole_days, minutes=extra_minutes)
 
@@ -264,6 +266,7 @@ def create_order_object_with_dates(phases, codice_articolo, quantita, order_id, 
     settings = fetch_settings()
     
     open_time = settings.get('orariAzienda', {}).get('inizio', {'ore': 8, 'minuti': 0})
+    close_time = settings.get('orariAzienda', {}).get('fine', {'ore': 18, 'minuti': 0})
     holiday_list = settings.get('ferieAziendali', [])
     pausa_pranzo = settings.get('pausaPranzo', {'inizio': {'ore': 12, 'minuti': 0}, 'fine': {'ore': 15, 'minuti': 0}})
 
@@ -276,6 +279,11 @@ def create_order_object_with_dates(phases, codice_articolo, quantita, order_id, 
 
     entrata_coda_fase = []
     for phase in phases:
+        # compute the delivery end time
+        if isinstance(end_date, str):
+            end_date = datetime.datetime(int(end_date.split("/")[2]), int(end_date.split("/")[1]), int(end_date.split("/")[0]), close_time['ore'], close_time['minuti'])
+
+        print(end_date)
         start_date = find_start_date_of_phase(end_date, phase, quantita, open_time, holiday_list, pausa_pranzo, graph, durations)
         entrata_coda_fase.append([start_date])#(int(start_date.timestamp() * 1000)) if start_date else None)
 
@@ -292,16 +300,16 @@ def create_order_object_with_dates(phases, codice_articolo, quantita, order_id, 
     order_object = {
         "codiceArticolo": str(codice_articolo),
         # mancava order startDate
-        "orderInsertDate": datetime.datetime.fromtimestamp(current_time.timestamp() / 1000),
+        "orderInsertDate": current_time, #datetime.datetime.fromtimestamp(current_time.timestamp() / 1000),
         # orderDeadline e customerDeadline sono la stessa cosa, col refactoring sistemiamo questa variabile
-        "orderDeadline": customer_deadline,
-        "customerDeadline":  customer_deadline,
+        "orderDeadline": datetime.datetime(int(customer_deadline.split("/")[2]), int(customer_deadline.split("/")[1]), int(customer_deadline.split("/")[0]), close_time['ore'], close_time['minuti']) if isinstance(customer_deadline, str) else customer_deadline,
+        "customerDeadline": datetime.datetime(int(customer_deadline.split("/")[2]), int(customer_deadline.split("/")[1]), int(customer_deadline.split("/")[0]), close_time['ore'], close_time['minuti']) if isinstance(customer_deadline, str) else customer_deadline,
         "orderDescription": "",
-        "orderStartDate": order_start_date,
+        "orderStartDate": order_start_date[0],
         "orderStatus": 0,
         # sistemati tutti gli array
         "phaseStatus": [[0] for _ in phases],
-        "assignedOperator": ["" for _ in phases],
+        "assignedOperator": [[""] for _ in phases],
         "phase": [[ph] for ph in phases],
         "phaseEndTime": [[time] for time in phase_end_times],
         "phaseLateMotivation": [["none"] for _ in phases],
@@ -309,7 +317,7 @@ def create_order_object_with_dates(phases, codice_articolo, quantita, order_id, 
         "quantita": quantita,
         "entrataCodaFase": entrata_coda_fase,
         "orderId": order_id,
-        "dataInizioLavorazioni": datetime.datetime.fromtimestamp(current_time.timestamp() / 1000),
+        "dataInizioLavorazioni": entrata_coda_fase[0][0], #datetime.datetime.fromtimestamp(current_time.timestamp() / 1000),
         "priority": 0,
         "inCodaAt": ""
     }

@@ -615,21 +615,64 @@ class MainWindow(QMainWindow):
             for document in collection.find():
                 order_id = document.get('orderId', 'UnknownOrderID')
                 codice_articolo = document.get('codiceArticolo', 'UnknownCode')
+                quantita = document.get('quantita', 'UnknownQuantity')  # Assuming this field exists
 
                 # Correctly extracting the date part from the orderDeadline string
                 order_deadline = str(document.get('orderDeadline', 'UnknownDeadline'))
                 date_part = order_deadline.split('T', 1)[0]  # Split the string at 'T' and take the first part
-
-                # Constructing filename using only the date part of the order deadline
-                filename = f"{order_id}_{codice_articolo}_{date_part[0:9]}.png"
+                sanitized_date_part = date_part.replace(':', '-')
+                #Constructing filename using the sanitized date part of the order deadline
+                filename = f"{order_id}_{codice_articolo}_{sanitized_date_part}.png"
                 full_path = os.path.join(folder, filename)
 
-                # Generate QR code
-                self.generate_qr(order_id, full_path)
+                # Generate QR code with text
+                self.generate_order_qr_with_text(order_id, full_path, order_id, codice_articolo, quantita)
 
             QMessageBox.information(self, "QR Codes Generated", f"Order QR codes have been successfully generated and saved in {folder}")
         except Exception as e:
             QMessageBox.critical(self, "Operation Failed", f"Failed to generate order QR codes: {e}")
+
+    def generate_order_qr_with_text(self, data, full_path, order_id, codice_articolo, quantita):
+        qr = qrcode.QRCode(
+            version=1,
+            error_correction=qrcode.constants.ERROR_CORRECT_L,
+            box_size=10,
+            border=4,
+        )
+        qr.add_data(data)
+        qr.make(fit=True)
+        img = qr.make_image(fill='black', back_color='white')
+
+        # Convert to a format that allows drawing
+        img = img.convert("RGB")
+
+        # Define font and get a drawing context
+        font = ImageFont.load_default()  
+        draw = ImageDraw.Draw(img)
+
+        # Text to add
+        text = f"Order ID: {order_id}\nCodice: {codice_articolo}\nQuantita: {quantita}"
+
+        # Calculate text size and position
+        text_bbox = draw.textbbox((0, 0), text, font=font)
+        text_width = text_bbox[2] - text_bbox[0]
+        text_height = text_bbox[3] - text_bbox[1]
+        img_width, img_height = img.size
+        x = (img_width - text_width) // 2
+        y = img_height + 10  # 10 pixels below the QR code
+
+        # Create a new image with extra space for the text
+        new_img_height = img_height + text_height + 20  # Adding some padding
+        new_img = Image.new("RGB", (img_width, new_img_height), "white")
+        new_img.paste(img, (0, 0))
+
+        # Draw the text on the new image
+        draw = ImageDraw.Draw(new_img)
+        draw.text((x, img_height + 10), text, font=font, fill="black")
+
+        # Save the image
+        new_img.save(full_path)
+
 
 
     def upload_queued_data(self):

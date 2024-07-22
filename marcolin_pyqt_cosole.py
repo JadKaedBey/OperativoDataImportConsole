@@ -52,9 +52,20 @@ def connect_to_mongodb(username, password):
         print(f"Error connecting to MongoDB: {e}")
         return False
     
+def trova_riga_per_id_legame(df, id_legame):
+    riga_trovata = df[df['ID legame'] == id_legame]
+    return riga_trovata
+
+def estrai_data_richiesta(df, id_legame):
+    riga = trova_riga_per_id_legame(df, id_legame)
+    if not riga.empty:
+        data_richiesta = riga['Data richiesta'].values[0]
+        return pd.to_datetime(data_richiesta)
+    return None
+    
 def create_orders_objects(file_path):
     # Load the data from Excel
-        #data = pd.read_excel(file_path)
+        dataOrders = pd.read_excel(file_path)
         global queued_df
         data = queued_df
     # Define the columns to use
@@ -152,6 +163,7 @@ def create_orders_objects(file_path):
             codice = row[codice_column]
             quantita = row[quantita_column]
             descrizione = row[descrizione_column]
+            orderDeadline = estrai_data_richiesta(dataOrders, order_id)
 
         # Create or update the order in the unique orders dict
             if order_id not in unique_orders:
@@ -169,15 +181,13 @@ def create_orders_objects(file_path):
                     "phaseLateMotivation": [["none"] for _ in fasiArray],
                     "phaseRealTime": [[0] for _ in fasiArray],
                     "priority": 0,
-                    "inCodaAt": ""
-                }
-                {
-                    "orderDeadline": datetime.datetime(int(customer_deadline.split("/")[2]), int(customer_deadline.split("/")[1]), int(customer_deadline.split("/")[0]), close_time['ore'], close_time['minuti']) if isinstance(customer_deadline, str) else customer_deadline,
-                    "customerDeadline": datetime.datetime(int(customer_deadline.split("/")[2]), int(customer_deadline.split("/")[1]), int(customer_deadline.split("/")[0]), close_time['ore'], close_time['minuti']) if isinstance(customer_deadline, str) else customer_deadline,
-                    "orderStartDate": order_start_date[0],
-                    "phaseEndTime": [[time] for time in phase_end_times],
-                    "entrataCodaFase": entrata_coda_fase,
-                    "dataInizioLavorazioni": entrata_coda_fase[0][0], #datetime.datetime.fromtimestamp(current_time.timestamp() / 1000),
+                    "inCodaAt": "",
+                    "orderDeadline": orderDeadline,
+                    "customerDeadline": orderDeadline,
+                    "orderStartDate": [],
+                    "phaseEndTime": [],
+                    "entrataCodaFase": [[] for _ in fasiArray],
+                    "dataInizioLavorazioni": datetime.now(),
                 }
         # Append the current Fasi and its Tempo Ciclo to the order
             unique_orders[order_id]['phase'].append(fasi)

@@ -59,7 +59,7 @@ def create_orders_objects(file_path):
         data = queued_df
     # Define the columns to use
         order_column = 'ID'
-        fasi_column = 'Fase'
+        fasi_column = 'Fasi'
         tempo_ciclo_column = 'Tempo ciclo [min]'
         codice_column = 'Codice'
         quantita_column = 'QTA'
@@ -71,7 +71,83 @@ def create_orders_objects(file_path):
     # Process the DataFrame
         for index, row in data.iterrows():
             order_id = row[order_column]
+
             fasi = row[fasi_column]
+            fasiArray = []
+            phase_end_times = []
+            if(row['FaseOperativo'] == 'Lavorazioni'):  
+                for fase in fase.split("+"):
+                    match fasi:
+                        case "SB":
+                            fasiArray.append([""])
+                            phase_end_times.append(row[fasi_column])
+                        case "S1":
+                            fasiArray.append([""])
+                            phase_end_times.append([""])
+                        case "FZS":
+                            fasiArray.append([""])
+                            phase_end_times.append([""])
+                        case "SV":
+                            fasiArray.append([""])
+                            phase_end_times.append([""])
+                        case "FI":
+                            fasiArray.append([""])
+                            phase_end_times.append([""])
+                        case "FO":
+                            fasiArray.append([""])
+                            phase_end_times.append([""])
+                        case "TOR":
+                            fasiArray.append([""])
+                            phase_end_times.append([""])
+                        case "S2":
+                            fasiArray.append([""])
+                            phase_end_times.append([""])
+                        case "C":
+                            fasiArray.append([""])
+                            phase_end_times.append([""])
+                        case "FR":
+                            fasiArray.append([""])
+                            phase_end_times.append([""])
+
+            else:
+                match fasi:
+                    case "Smig":
+                        fasiArray.append(["Saldatura"])
+                        phase_end_times.append(["Saldatura"])
+                    case "P":
+                        fasiArray.append(["Pressopiega"])
+                        phase_end_times.append(["Pressopiega"])
+                    case "A":
+                        fasiArray.append(["Assemblaggio"])
+                        phase_end_times.append(["Assemblaggio"])
+                    case "TO+D":
+                        fasiArray.append(["Taglio"])
+                        phase_end_times.append(["Taglio"])
+                    case "Stig":
+                        fasiArray.append(["Saldatura"])
+                        phase_end_times.append(["Saldatura"])
+                    case "ZF":
+                        fasiArray.append(["Zincatura"])
+                        phase_end_times.append(["Zincatura"])
+                    case "Stig+Smig":
+                        fasiArray.append(["Saldatura"])
+                        phase_end_times.append(["Saldatura"])
+                    case "TA+D":
+                        fasiArray.append(["Taglio"])
+                        phase_end_times.append(["Taglio"])
+                    case "T+D":
+                        fasiArray.append(["Taglio"])
+                        phase_end_times.append(["Taglio"])
+                    case "TTM":
+                        fasiArray.append(["Piegatondini"])
+                        phase_end_times.append(["Piegatondini"])
+                    case "TTM+PTM":
+                        fasiArray.append(["Piegatondini"])
+                        phase_end_times.append(["Piegatondini"])
+                    case "ZC":
+                        fasiArray.append(["Zincatura"])
+                        phase_end_times.append(["Zincatura"])
+
             tempo_ciclo = row[tempo_ciclo_column]
             codice = row[codice_column]
             quantita = row[quantita_column]
@@ -80,19 +156,28 @@ def create_orders_objects(file_path):
         # Create or update the order in the unique orders dict
             if order_id not in unique_orders:
                 unique_orders[order_id] = {
-                "_id": ObjectId(),  # Generate new MongoDB ObjectId
-                "codiceArticolo": codice,
-                "orderDescription": descrizione,
-                "quantita": quantita,
-                "orderStartDate": None,
-                "orderStatus": None,
-                "phaseStatus": None,
-                "assignedOperator": None,
-                "phase": [],
-                "phaseEndTime": [],
-                "phaseLateMotivation": None,
-                "phaseRealTime": None,
-                "entrataCodaFase": []
+                    "_id": ObjectId(),  # Generate new MongoDB ObjectId
+                    "orderId": order_id,
+                    "orderInsertDate": datetime.datetime.now(),
+                    "codiceArticolo": codice,
+                    "orderDescription": descrizione,
+                    "quantita": quantita,
+                    "orderStatus": 0,
+                    "phaseStatus": [[0] for _ in fasiArray],
+                    "assignedOperator": [[""] for _ in fasiArray],
+                    "phase": [[ph] for ph in fasiArray],
+                    "phaseLateMotivation": [["none"] for _ in fasiArray],
+                    "phaseRealTime": [[0] for _ in fasiArray],
+                    "priority": 0,
+                    "inCodaAt": ""
+                }
+                {
+                    "orderDeadline": datetime.datetime(int(customer_deadline.split("/")[2]), int(customer_deadline.split("/")[1]), int(customer_deadline.split("/")[0]), close_time['ore'], close_time['minuti']) if isinstance(customer_deadline, str) else customer_deadline,
+                    "customerDeadline": datetime.datetime(int(customer_deadline.split("/")[2]), int(customer_deadline.split("/")[1]), int(customer_deadline.split("/")[0]), close_time['ore'], close_time['minuti']) if isinstance(customer_deadline, str) else customer_deadline,
+                    "orderStartDate": order_start_date[0],
+                    "phaseEndTime": [[time] for time in phase_end_times],
+                    "entrataCodaFase": entrata_coda_fase,
+                    "dataInizioLavorazioni": entrata_coda_fase[0][0], #datetime.datetime.fromtimestamp(current_time.timestamp() / 1000),
                 }
         # Append the current Fasi and its Tempo Ciclo to the order
             unique_orders[order_id]['phase'].append(fasi)

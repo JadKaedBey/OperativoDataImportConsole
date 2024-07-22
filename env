@@ -1,8 +1,0 @@
-           
-IMPORT_TEST_URI="mongodb+srv://jad:jad@importtestcluster.f6quzj0.mongodb.net/?retryWrites=true&w=majority&appName=ImportTestCluster"
-
-AMADE_URI='mongodb+srv://amade_serverless:UH0GEayED87@amadeserverlesscluster.xavtarq.mongodb.net/?retryWrites=true&w=majority&appName=AMADEServerlessCluster'
-
-MARCOLIN_URI='mongodb+srv://marcolin:hLI4i39ELcFVmwvw@marcolin-serverless-clu.q43ythq.mongodb.net/?retryWrites=true&w=majority&appName=Marcolin-Serverless-Cluster'
-
-DEMO_URI='mongodb+srv://jad:jad@demo.0p0q3ph.mongodb.net/?retryWrites=true&w=majority&appName=demo'

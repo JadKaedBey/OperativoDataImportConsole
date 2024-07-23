@@ -28,6 +28,90 @@ original_logo_length = 1246
 window_width = 1600
 window_height = 1600
 
+def create_json_for_flowchart(codice, phases, cycle_times, description):
+        element_ids = [str(ObjectId()) for _ in phases]
+        dashboard_elements = []
+        for i, (phase, time) in enumerate(zip(phases, cycle_times)):
+            element = {
+                "positionDx": 101.2 + 200 * i,
+                "positionDy": 240.2,
+                "size.width": 100.0, 
+                "size.height": 50.0,
+                "text": phase,
+                "textColor": 4278190080,
+                "fontFamily": None,
+                "textSize": 12.0,
+                "textIsBold": False,
+                "id": element_ids[i],
+                "kind": 0,
+                "handlers": [3, 2],
+                "handlerSize": 15.0,
+                "backgroundColor": 4294967295,
+                "borderColor": 4293336434,
+                "borderThickness": 3.0,
+                "elevation": 4.0,
+                "next": [],
+                "phaseDuration": int(time)
+            }
+            if i < len(phases) - 1:
+                element['next'].append({
+                    "destElementId": element_ids[i + 1],
+                    "arrowParams": {
+                        "thickness": 1.7,
+                        "headRadius": 6.0,
+                        "tailLength": 25.0,
+                        "color": 4278190080,
+                        "style": 0,
+                        "tension": 1.0,
+                        "startArrowPositionX": 1.0,
+                        "startArrowPositionY": 0.0,
+                        "endArrowPositionX": -1.0,
+                        "endArrowPositionY": 0.0
+                    },
+                    "pivots": []
+                })
+            dashboard_elements.append(element)
+        json_output = {
+            "_id": ObjectId(),
+            "titolo": codice,
+            "descrizione": description,
+            "image": "https://upload.wikimedia.org/wikipedia/commons/1/14/No_Image_Available.jpg",
+            "dashboard": {
+                "elements": dashboard_elements,
+                "dashboardSizeWidth": 1279.0,
+                "dashboardSizeHeight": 566.72,
+                "gridBackgroundParams": {
+                    "offset.dx": -580.4256299112267, 
+                    "offset.dy": -150.19796474249733,
+                    "scale": 1.0,
+                    "gridSquare": 20.0,
+                    "gridThickness": 0.7,
+                    "secondarySquareStep": 5,
+                    "backgroundColor": 4294967295,
+                    "gridColor": 520093696
+                },
+                "blockDefaultZoomGestures": False,
+                "minimumZoomFactor": 0.25,
+                "arrowStyle": 0
+            },
+            "catalogo": [{
+                "_id": ObjectId(),
+                "prodId": codice,  
+                "prodotto": codice, 
+                "descrizione": description,
+                "famiglia": codice,
+                "elements": [
+                    {
+                        "pId": element_ids[i],
+                        "property": "Example property", # Placeholder
+                        "duration": int(time)
+                    } for i, time in enumerate(cycle_times)
+                ]
+            }]
+        }
+        return json_output
+    
+
 def order_upload_to_mongodb(orders, db_url, db_name, collection_name):
         client = MongoClient(db_url)
         db = client[db_name]
@@ -248,10 +332,11 @@ class MainWindow(QMainWindow):
         self.wipe_button = QPushButton("Wipe Database")
         self.wipe_button.setStyleSheet("background-color: red; color: white;")
         self.export_button = QPushButton("Export Data")
+        self.family_upload_button = QPushButton("Upload Famiglie (Flussi)")
 
         # Setup font
         font = QFont("Proxima Nova", 12)
-        for button in [self.queue_button, self.clear_button, self.upload_button, self.wipe_button, self.export_button]:
+        for button in [self.queue_button, self.clear_button, self.upload_button, self.wipe_button, self.export_button, self.family_upload_button]:
             button.setFont(font)
             button.setFixedSize(350, 50)
 
@@ -269,6 +354,7 @@ class MainWindow(QMainWindow):
 
         center_layout.addWidget(self.wipe_button)
         center_layout.addWidget(self.export_button)
+        center_layout.addWidget(self.family_upload_button)
 
         # Add stretches to center the center layout
         main_horizontal_layout.addLayout(left_layout)
@@ -282,6 +368,7 @@ class MainWindow(QMainWindow):
         self.upload_button.clicked.connect(self.upload_queued_data)
         self.wipe_button.clicked.connect(self.wipe_database)
         self.export_button.clicked.connect(self.select_database_and_collection)
+        self.family_upload_button.clicked.connect(self.marcolin_import_famiglie)
 
         self.upload_orders_button = QPushButton("Upload Orders")
         self.upload_orders_button.setFont(font)
@@ -464,6 +551,81 @@ class MainWindow(QMainWindow):
         except Exception as e:
             print(f"Error exporting data: {e}")
             QMessageBox.critical(self, "Export Failed", f"Failed to export data: {e}")
+            
+    def marcolin_import_famiglie(self):
+        # Spinoff of the upload function created in marcolin_import_&_json_test.py 
+        # Created for Legami_KB_officina from Marcolin
+        
+        # Prompt the user to select an Excel file
+        file_path, _ = QFileDialog.getOpenFileName(self, "Open Excel File", "", "Excel files (*.xlsx)")
+        if not file_path:
+            QMessageBox.warning(self, "File Selection", "No file selected.")
+            return
+
+        if not file_path.endswith('.xlsx'):
+            QMessageBox.critical(self, "File Error", "The selected file is not an Excel file.")
+            return
+
+        try:
+            # Reading the Excel file
+            df = pd.read_excel(file_path)
+        except Exception as e:
+            QMessageBox.critical(self, "File Error", f"Failed to read the Excel file: {e}")
+            return
+
+        # Check if required columns are present in the DataFrame
+        required_columns = {'Codice', 'FaseOperativo', 'LTFase', 'Tempo Ciclo', 'Qta', 'Descrizione', 'Accessori'}
+        if not required_columns.issubset(df.columns):
+            missing_columns = required_columns - set(df.columns)
+            QMessageBox.critical(self, "File Error", "Missing required columns: " + ", ".join(missing_columns))
+            return
+
+        output_directory = './output_jsons'
+        
+        db_name = 'process_db'
+        collection_name = 'famiglie_di_prodotto'
+        # here client is a global variable, so no need to specify the string
+        db = client[db_name]
+        collection = db[collection_name]
+
+        print("Reading the Excel file...")
+        df = pd.read_excel(file_path)
+
+        processed_data = {
+            'Codice': [],
+            'Fasi': [],
+            'LT Fase Array': [],
+            'Tempo Ciclo Array': [],
+            'QTA': [],
+            'Description': [],
+        }
+
+        print("Processing data...")
+        for codice, group in df.groupby('Codice'):
+            fasi = group['FaseOperativo'].tolist()
+            lt_fase = group['LTFase'].tolist()
+            tempo_ciclo = group['Tempo Ciclo'].tolist()
+            qta = group['Qta'].iloc[0]
+            description = group['Descrizione'].iloc[0] + " " + " ".join(group['Accessori'].dropna().unique())
+
+            print(f"Creating and uploading JSON for Codice: {codice}")
+            json_object = create_json_for_flowchart(codice, fasi, tempo_ciclo, description)
+
+            processed_data['Codice'].append(codice)
+            processed_data['Fasi'].append(fasi)
+            processed_data['LT Fase Array'].append(lt_fase)
+            processed_data['Tempo Ciclo Array'].append(tempo_ciclo)
+            processed_data['QTA'].append(qta)
+            processed_data['Description'].append(description)
+
+            # Upload JSON object directly to MongoDB
+            collection.insert_one(json_object)
+            print(f"Uploaded JSON for Codice: {codice} to MongoDB")
+
+        # TESTING: 
+        # print("Exporting data to Excel...")
+        # output_df = pd.DataFrame(processed_data)
+        # output_df.to_excel(os.path.join(output_directory, 'formatted_output.xlsx'), index=False)
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)

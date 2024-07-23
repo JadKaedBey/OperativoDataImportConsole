@@ -113,7 +113,6 @@ def create_json_for_flowchart(codice, phases, cycle_times, description):
     
 
 def order_upload_to_mongodb(orders, db_url, db_name, collection_name):
-        client = MongoClient(db_url)
         db = client[db_name]
         collection = db[collection_name]
         result = collection.insert_many(orders)
@@ -166,6 +165,7 @@ def create_orders_objects(file_path):
         descrizione_column = 'Descrizione'
         accessori_column = 'Accessori'
         lead_time_column = 'LTFase'
+        deadline_column = 'Data richiesta'
         
         orders = []
 
@@ -179,19 +179,20 @@ def create_orders_objects(file_path):
             tempo_ciclo = row[tempo_ciclo_column]
             codice = row[codice_column]
             quantita = row[quantita_column]
-            descrizione = row[descrizione_column]
-            accessori = row[accessori_column]
+            descrizione = str(row[accessori_column]) + " " + row[descrizione_column] if str(row[accessori_column]) != "nan" else row[descrizione_column]
             lead_time_fase = row[lead_time_column]
-            orderDeadline = estrai_data_richiesta(dataOrders, order_id)
+            orderDeadline = row[deadline_column] #row[deadline_column] #datetime.datetime.now() #estrai_data_richiesta(dataOrders, order_id)
 
         # Create or update the order in the unique orders dict
             if order_id not in unique_orders:
                 unique_orders[order_id] = {
+                    # chiave da eliminare per memorizzare i sabati e domeniche da saltare in seguito
+                    "count": 0,
                     "_id": ObjectId(),  # Generate new MongoDB ObjectId
-                    "orderId": order_id,
+                    "orderId": str(order_id),
                     "orderInsertDate": datetime.datetime.now(),
                     "codiceArticolo": codice,
-                    "orderDescription": accessori + " " + descrizione,
+                    "orderDescription": descrizione,
                     "quantita": quantita,
                     "orderStatus": 0,
                     "priority": 0,
@@ -205,16 +206,28 @@ def create_orders_objects(file_path):
                     # entrerà in coda in ogni macchinario
                     "orderStartDate": orderDeadline,
                     "dataInizioLavorazioni": orderDeadline,
+                    "phase": [],
+                    "phaseStatus": [],
+                    "assignedOperator": [],
+                    "phaseLateMotivation": [],
+                    "phaseEndTime": [],
+                    "phaseRealTime": [],
+                    "entrataCodaFase": [],
                 }
         # Append the current Fasi and its Tempo Ciclo to the order
             unique_orders[order_id]['phase'].append([fasi])
-            unique_orders[order_id]['phaseStatus'].append([0])
+            unique_orders[order_id]['phaseStatus'].append([1]) # NO UFFICIO ACQUISTI
             unique_orders[order_id]['assignedOperator'].append([""])
             unique_orders[order_id]['phaseLateMotivation'].append(["none"])
             unique_orders[order_id]['phaseEndTime'].append([tempo_ciclo] if fasi != "Zincatura" else [0])
             unique_orders[order_id]['phaseRealTime'].append([0])
-            unique_orders[order_id]['dataInizioLavorazioni'] = unique_orders[order_id]['dataInizioLavorazioni'] - datetime.timedelta(days=lead_time_fase)
-            unique_orders[order_id]['orderStartDate'] = unique_orders[order_id]['orderStartDate'] - datetime.timedelta(days=lead_time_fase)
+
+            possible_date = unique_orders[order_id]['dataInizioLavorazioni'] - datetime.timedelta(days=lead_time_fase + unique_orders[order_id]['count'])
+            if possible_date.weekday() >= 5:
+                unique_orders[order_id]['count'] = unique_orders[order_id]['count'] + 1
+
+            unique_orders[order_id]['dataInizioLavorazioni'] = unique_orders[order_id]['dataInizioLavorazioni'] - datetime.timedelta(days=lead_time_fase + unique_orders[order_id]['count'])
+            unique_orders[order_id]['orderStartDate'] = unique_orders[order_id]['orderStartDate'] - datetime.timedelta(days=lead_time_fase + unique_orders[order_id]['count'])
             # Entrata coda fase è il datetime che rappresenta quando una fase deve cominciare
             # usando dataInizioLavorazioni in ogni iterazione so esattamente quando ogni fase
             # deve cominciare, ma l'array dovrà essere rovesciato. Infatti, guardando l'excel,
@@ -222,7 +235,8 @@ def create_orders_objects(file_path):
             unique_orders[order_id]['entrataCodaFase'].append([unique_orders[order_id]['dataInizioLavorazioni']])
 
         for ordine in unique_orders:
-            ordine['entrataCodaFase'] = ordine['entrataCodaFase'].reverse()
+            unique_orders[ordine]['entrataCodaFase'] = unique_orders[ordine]['entrataCodaFase'][::-1]
+            unique_orders[ordine].pop('count', None)
 
     # Convert unique orders dictionary to a list for MongoDB insertion
         orders.extend(unique_orders.values())

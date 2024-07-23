@@ -1,3 +1,4 @@
+import os
 import sys
 from PyQt5.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QPushButton, QWidget, QLabel, QTableWidget, \
     QTableWidgetItem, QFileDialog, QMessageBox, QLineEdit, QDialog, QGridLayout, QComboBox, QDialogButtonBox, QHBoxLayout
@@ -40,9 +41,13 @@ def connect_to_mongodb(username, password):
     print(f"Attempting to connect with username: {username} and password: {password}")
     try:
         if username == "1" and password == "1":
-            client = MongoClient('mongodb+srv://michael:stegish@jadclu-ster.d4ppdse.mongodb.net/', server_api=ServerApi('1'))
-        elif username == "user2" and password == "password2":
-            client = MongoClient('mongodb+srv://user2:password2@cluster2.mongodb.net/')
+            client = MongoClient(os.getenv("IMPORT_TEST_URI"))
+        elif username == "amade" and password == "amade":
+            client = MongoClient(os.getenv("AMADE_URI"))
+        elif username == "marcolin" and password == "marcolin":
+            client = MongoClient(os.getenv("MARCOLIN_URI"))
+        elif username == "demo" and password == "demo":
+            client = MongoClient(os.getenv("DEMO_URI"))
         else:
             print("Invalid credentials")
             return False
@@ -70,99 +75,29 @@ def create_orders_objects(file_path):
         data = queued_df
     # Define the columns to use
         order_column = 'ID'
-        fasi_column = 'Fasi'
-        tempo_ciclo_column = 'Tempo ciclo [min]'
+        fasi_column = 'FaseOperativo'
+        tempo_ciclo_column = 'Tempo Ciclo'
         codice_column = 'Codice'
-        quantita_column = 'QTA'
+        quantita_column = 'Qta'
         descrizione_column = 'Descrizione'
+        accessori_column = 'Accessori'
+        lead_time_column = 'LTFase'
         
         orders = []
 
         unique_orders = {}
     # Process the DataFrame
-        for index, row in data.iterrows():
+        for index, row in dataOrders.iterrows():
             order_id = row[order_column]
 
             fasi = row[fasi_column]
-            fasiArray = []
-            phase_end_times = []
-            if(row['FaseOperativo'] == 'Lavorazioni'):  
-                for fase in fase.split("+"):
-                    match fasi:
-                        case "SB":
-                            fasiArray.append([""])
-                            phase_end_times.append(row[fasi_column])
-                        case "S1":
-                            fasiArray.append([""])
-                            phase_end_times.append([""])
-                        case "FZS":
-                            fasiArray.append([""])
-                            phase_end_times.append([""])
-                        case "SV":
-                            fasiArray.append([""])
-                            phase_end_times.append([""])
-                        case "FI":
-                            fasiArray.append([""])
-                            phase_end_times.append([""])
-                        case "FO":
-                            fasiArray.append([""])
-                            phase_end_times.append([""])
-                        case "TOR":
-                            fasiArray.append([""])
-                            phase_end_times.append([""])
-                        case "S2":
-                            fasiArray.append([""])
-                            phase_end_times.append([""])
-                        case "C":
-                            fasiArray.append([""])
-                            phase_end_times.append([""])
-                        case "FR":
-                            fasiArray.append([""])
-                            phase_end_times.append([""])
-
-            else:
-                match fasi:
-                    case "Smig":
-                        fasiArray.append(["Saldatura"])
-                        phase_end_times.append(["Saldatura"])
-                    case "P":
-                        fasiArray.append(["Pressopiega"])
-                        phase_end_times.append(["Pressopiega"])
-                    case "A":
-                        fasiArray.append(["Assemblaggio"])
-                        phase_end_times.append(["Assemblaggio"])
-                    case "TO+D":
-                        fasiArray.append(["Taglio"])
-                        phase_end_times.append(["Taglio"])
-                    case "Stig":
-                        fasiArray.append(["Saldatura"])
-                        phase_end_times.append(["Saldatura"])
-                    case "ZF":
-                        fasiArray.append(["Zincatura"])
-                        phase_end_times.append(["Zincatura"])
-                    case "Stig+Smig":
-                        fasiArray.append(["Saldatura"])
-                        phase_end_times.append(["Saldatura"])
-                    case "TA+D":
-                        fasiArray.append(["Taglio"])
-                        phase_end_times.append(["Taglio"])
-                    case "T+D":
-                        fasiArray.append(["Taglio"])
-                        phase_end_times.append(["Taglio"])
-                    case "TTM":
-                        fasiArray.append(["Piegatondini"])
-                        phase_end_times.append(["Piegatondini"])
-                    case "TTM+PTM":
-                        fasiArray.append(["Piegatondini"])
-                        phase_end_times.append(["Piegatondini"])
-                    case "ZC":
-                        fasiArray.append(["Zincatura"])
-                        phase_end_times.append(["Zincatura"])
 
             tempo_ciclo = row[tempo_ciclo_column]
             codice = row[codice_column]
             quantita = row[quantita_column]
             descrizione = row[descrizione_column]
+            accessori = row[accessori_column]
+            lead_time_fase = row[lead_time_column]
             orderDeadline = estrai_data_richiesta(dataOrders, order_id)
 
         # Create or update the order in the unique orders dict
@@ -172,26 +107,38 @@ def create_orders_objects(file_path):
                     "orderId": order_id,
                     "orderInsertDate": datetime.datetime.now(),
                     "codiceArticolo": codice,
-                    "orderDescription": descrizione,
+                    "orderDescription": accessori + " " + descrizione,
                     "quantita": quantita,
                     "orderStatus": 0,
-                    "phaseStatus": [[0] for _ in fasiArray],
-                    "assignedOperator": [[""] for _ in fasiArray],
-                    "phase": [[ph] for ph in fasiArray],
-                    "phaseLateMotivation": [["none"] for _ in fasiArray],
-                    "phaseRealTime": [[0] for _ in fasiArray],
                     "priority": 0,
                     "inCodaAt": "",
+                    # DUPLICATO
                     "orderDeadline": orderDeadline,
                     "customerDeadline": orderDeadline,
-                    "orderStartDate": [],
-                    "phaseEndTime": [],
-                    "entrataCodaFase": [[] for _ in fasiArray],
-                    "dataInizioLavorazioni": datetime.now(),
+                    # DUPLICATO
+                    # questi due campi vengono settati alla deadline e poi per ogni fase
+                    # viene rimosso il lead time di ogni fase per capire quando l'ordine
+                    # entrerà in coda in ogni macchinario
+                    "orderStartDate": orderDeadline,
+                    "dataInizioLavorazioni": orderDeadline,
                 }
         # Append the current Fasi and its Tempo Ciclo to the order
-            unique_orders[order_id]['phase'].append(fasi)
-            unique_orders[order_id]['phaseEndTime'].append(tempo_ciclo)
+            unique_orders[order_id]['phase'].append([fasi])
+            unique_orders[order_id]['phaseStatus'].append([0])
+            unique_orders[order_id]['assignedOperator'].append([""])
+            unique_orders[order_id]['phaseLateMotivation'].append(["none"])
+            unique_orders[order_id]['phaseEndTime'].append([tempo_ciclo] if fasi != "Zincatura" else [0])
+            unique_orders[order_id]['phaseRealTime'].append([0])
+            unique_orders[order_id]['dataInizioLavorazioni'] = unique_orders[order_id]['dataInizioLavorazioni'] - datetime.timedelta(days=lead_time_fase)
+            unique_orders[order_id]['orderStartDate'] = unique_orders[order_id]['orderStartDate'] - datetime.timedelta(days=lead_time_fase)
+            # Entrata coda fase è il datetime che rappresenta quando una fase deve cominciare
+            # usando dataInizioLavorazioni in ogni iterazione so esattamente quando ogni fase
+            # deve cominciare, ma l'array dovrà essere rovesciato. Infatti, guardando l'excel,
+            # le fasi sono scritte in ordine dalla prima all'ultima
+            unique_orders[order_id]['entrataCodaFase'].append([unique_orders[order_id]['dataInizioLavorazioni']])
+
+        for ordine in unique_orders:
+            ordine['entrataCodaFase'] = ordine['entrataCodaFase'].reverse()
 
     # Convert unique orders dictionary to a list for MongoDB insertion
         orders.extend(unique_orders.values())

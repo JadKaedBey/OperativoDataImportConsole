@@ -8,12 +8,14 @@ import pandas as pd
 from pymongo import MongoClient
 from pymongo.server_api import ServerApi
 from math import floor
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 from bson import ObjectId
 import datetime
 import json
+from dotenv import load_dotenv
+import qrcode
 
-
+load_dotenv()
 # Initialize global variable
 queued_df = pd.DataFrame()
 client = None  # Initialize client variable
@@ -323,6 +325,8 @@ class MainWindow(QMainWindow):
 
         self.logo_layout = QHBoxLayout()
 
+            
+        self.qr_save_path = "./QRs" 
         # Add company logo
         self.logo_label = QLabel(self)
         self.pixmap = QPixmap(r".\OPERATIVO_L_Main_Color.png")
@@ -347,6 +351,8 @@ class MainWindow(QMainWindow):
         self.wipe_button.setStyleSheet("background-color: red; color: white;")
         self.export_button = QPushButton("Export Data")
         self.family_upload_button = QPushButton("Upload Famiglie (Flussi)")
+        self.utenti_qr_code_button = QPushButton("Generate Operatori QR Codes")
+        self.order_qr_code_button = QPushButton("Generate Orders QR Codes")
 
         # Setup font
         font = QFont("Proxima Nova", 12)
@@ -369,7 +375,9 @@ class MainWindow(QMainWindow):
         center_layout.addWidget(self.wipe_button)
         center_layout.addWidget(self.export_button)
         center_layout.addWidget(self.family_upload_button)
-
+        center_layout.addWidget(self.utenti_qr_code_button)
+        center_layout.addWidget(self.order_qr_code_button)
+        
         # Add stretches to center the center layout
         main_horizontal_layout.addLayout(left_layout)
         main_horizontal_layout.addLayout(center_layout)
@@ -383,6 +391,9 @@ class MainWindow(QMainWindow):
         self.wipe_button.clicked.connect(self.wipe_database)
         self.export_button.clicked.connect(self.select_database_and_collection)
         self.family_upload_button.clicked.connect(self.marcolin_import_famiglie)
+        self.utenti_qr_code_button.clicked.connect(self.generate_and_save_qr_codes)
+        self.order_qr_code_button.clicked.connect(self.generate_order_qr_codes)
+
 
         self.upload_orders_button = QPushButton("Upload Orders")
         self.upload_orders_button.setFont(font)
@@ -395,6 +406,136 @@ class MainWindow(QMainWindow):
         self.table = QTableWidget()
         self.layout.addWidget(self.table)
         
+    def generate_and_save_qr_codes(self):
+        if not os.path.exists(self.qr_save_path):
+            os.makedirs(self.qr_save_path)
+        try:
+            db = client['azienda']  
+            collection = db['utenti']
+            for document in collection.find():
+                name = document.get('nome', 'UnknownName')
+                surname = document.get('cognome', 'UnknownSurname')
+                password = document.get('password', 'NoPassword')  # Assuming 'password' is the field name in your database
+                qr_data = f"{name}||{surname}||{password}"  # Format the data as required by the new QR code system
+                filename = f"{name}_{surname}.png"
+                self.generate_qr(qr_data, filename, name, surname)  # Pass the name and surname to the QR generation function
+            QMessageBox.information(self, "QR Codes Generated", "QR codes have been successfully generated and saved in " + self.qr_save_path)
+        except Exception as e:
+            QMessageBox.critical(self, "Operation Failed", f"Failed to generate QR codes: {e}")
+
+    def generate_qr(self, data, filename, name, surname):
+        qr = qrcode.QRCode(
+            version=1,
+            error_correction=qrcode.constants.ERROR_CORRECT_L,
+            box_size=10,
+            border=4,
+        )
+        qr.add_data(data)
+        qr.make(fit=True)
+        img = qr.make_image(fill='black', back_color='white')
+
+        # Convert to a format that allows drawing
+        img = img.convert("RGB")
+
+        # Define font and get a drawing context
+        font = ImageFont.load_default()  # You can specify a different font here
+        draw = ImageDraw.Draw(img)
+
+        # Text to add
+        text = f"{name} {surname}"
+
+        # Calculate text size and position
+        text_bbox = draw.textbbox((0, 0), text, font=font)
+        text_width = text_bbox[2] - text_bbox[0]
+        text_height = text_bbox[3] - text_bbox[1]
+        img_width, img_height = img.size
+        x = (img_width - text_width) // 2
+        y = img_height - text_height - 10  # 10 pixels above the bottom edge
+
+        # Create a new image with extra space for the text
+        new_img_height = img_height + text_height + 20  # Adding some padding
+        new_img = Image.new("RGB", (img_width, new_img_height), "white")
+        new_img.paste(img, (0, 0))
+
+        # Draw the text on the new image
+        draw = ImageDraw.Draw(new_img)
+        draw.text((x, img_height + 10), text, font=font, fill="black")
+
+        # Save the image
+        full_path = os.path.join(self.qr_save_path, filename)
+        new_img.save(full_path)
+        
+
+    def generate_order_qr_codes(self):
+        folder = QFileDialog.getExistingDirectory(self, "Select Folder")
+        if not folder:
+            QMessageBox.warning(self, "No Folder Selected", "Please select a valid folder to save QR codes.")
+            return
+
+        try:
+            db = client['orders_db']
+            collection = db['ordini']
+            for document in collection.find():
+                order_id = document.get('orderId', 'UnknownOrderID')
+                codice_articolo = document.get('codiceArticolo', 'UnknownCode')
+                quantita = document.get('quantita', 'UnknownQuantity')  # Assuming this field exists
+
+                # Correctly extracting the date part from the orderDeadline string
+                order_deadline = str(document.get('orderDeadline', 'UnknownDeadline'))
+                date_part = order_deadline.split('T', 1)[0]  # Split the string at 'T' and take the first part
+                sanitized_date_part = date_part.replace(':', '-')
+                #Constructing filename using the sanitized date part of the order deadline
+                filename = f"{order_id}_{codice_articolo}_{sanitized_date_part}.png"
+                full_path = os.path.join(folder, filename)
+
+                # Generate QR code with text
+                self.generate_order_qr_with_text(order_id, full_path, order_id, codice_articolo, quantita)
+
+            QMessageBox.information(self, "QR Codes Generated", f"Order QR codes have been successfully generated and saved in {folder}")
+        except Exception as e:
+            QMessageBox.critical(self, "Operation Failed", f"Failed to generate order QR codes: {e}")
+        
+    def generate_order_qr_with_text(self, data, full_path, order_id, codice_articolo, quantita):
+        qr = qrcode.QRCode(
+            version=1,
+            error_correction=qrcode.constants.ERROR_CORRECT_L,
+            box_size=10,
+            border=4,
+        )
+        qr.add_data(data)
+        qr.make(fit=True)
+        img = qr.make_image(fill='black', back_color='white')
+
+        # Convert to a format that allows drawing
+        img = img.convert("RGB")
+
+        # Define font and get a drawing context
+        font = ImageFont.load_default()  
+        draw = ImageDraw.Draw(img)
+
+        # Text to add
+        text = f"Order ID: {order_id}\nCodice: {codice_articolo}\nQuantita: {quantita}"
+
+        # Calculate text size and position
+        text_bbox = draw.textbbox((0, 0), text, font=font)
+        text_width = text_bbox[2] - text_bbox[0]
+        text_height = text_bbox[3] - text_bbox[1]
+        img_width, img_height = img.size
+        x = (img_width - text_width) // 2
+        y = img_height + 10  # 10 pixels below the QR code
+
+        # Create a new image with extra space for the text
+        new_img_height = img_height + text_height + 20  # Adding some padding
+        new_img = Image.new("RGB", (img_width, new_img_height), "white")
+        new_img.paste(img, (0, 0))
+
+        # Draw the text on the new image
+        draw = ImageDraw.Draw(new_img)
+        draw.text((x, img_height + 10), text, font=font, fill="black")
+
+        # Save the image
+        new_img.save(full_path)
+    
     def initialize_ui(self):
         # Common setup code here
 

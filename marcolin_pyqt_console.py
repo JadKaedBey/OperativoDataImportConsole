@@ -33,7 +33,7 @@ window_height = 1600
 def create_json_for_flowchart(codice, phases, cycle_times, description, phaseTargetQueue):
         element_ids = [str(ObjectId()) for _ in phases]
         dashboard_elements = []
-        for i, (phase, time) in enumerate(zip(phases, cycle_times, phaseTargetQueue)):
+        for i, (phase, time, phaseTargetQueue) in enumerate(zip(phases, cycle_times, phaseTargetQueue)):
             element = {
                 "positionDx": 101.2 + 200 * i,
                 "positionDy": 240.2,

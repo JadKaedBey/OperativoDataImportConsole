@@ -30,16 +30,17 @@ original_logo_length = 1246
 window_width = 1600
 window_height = 1600
 
-def create_json_for_flowchart(codice, phases, cycle_times, description):
+def create_json_for_flowchart(codice, phases, cycle_times, description, phaseTargetQueue):
         element_ids = [str(ObjectId()) for _ in phases]
         dashboard_elements = []
-        for i, (phase, time) in enumerate(zip(phases, cycle_times)):
+        for i, (phase, time) in enumerate(zip(phases, cycle_times, phaseTargetQueue)):
             element = {
                 "positionDx": 101.2 + 200 * i,
                 "positionDy": 240.2,
                 "size.width": 100.0, 
                 "size.height": 50.0,
                 "text": phase,
+                "phaseTargetQueue": phaseTargetQueue,
                 "textColor": 4278190080,
                 "fontFamily": None,
                 "textSize": 12.0,
@@ -347,7 +348,7 @@ class MainWindow(QMainWindow):
         self.clear_button = QPushButton("Clear Queued Data")
         self.upload_button = QPushButton("Upload Queued Data")
         self.upload_button.setStyleSheet("background-color: green; color: white;")
-        self.wipe_button = QPushButton("Wipe Database")
+        self.wipe_button = QPushButton("Wipe Flussi Database")
         self.wipe_button.setStyleSheet("background-color: red; color: white;")
         self.export_button = QPushButton("Export Data")
         self.family_upload_button = QPushButton("Upload Famiglie (Flussi)")
@@ -634,7 +635,7 @@ class MainWindow(QMainWindow):
         if reply == QMessageBox.Yes:
             try:
                 db = client['processes_db']
-                collection = db['macchinari']
+                collection = db['famiglie_di_prodotto']
                 collection.delete_many({})
                 self.clear_data()
                 QMessageBox.information(self, "Success", "The database has been wiped.")
@@ -764,7 +765,7 @@ class MainWindow(QMainWindow):
             description = group['Descrizione'].iloc[0] + " " + " ".join(group['Accessori'].dropna().unique())
 
             print(f"Creating and uploading JSON for Codice: {codice}")
-            json_object = create_json_for_flowchart(codice, fasi, tempo_ciclo, description)
+            json_object = create_json_for_flowchart(codice, fasi, tempo_ciclo, description, lt_fase)
 
             processed_data['Codice'].append(codice)
             processed_data['Fasi'].append(fasi)

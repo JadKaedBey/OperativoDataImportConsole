@@ -124,16 +124,17 @@ def find_start_date_of_phase(end_date, target_phase, quantity, open_time, holida
     return None
 
 
-def create_json_for_flowchart(codice, phases, cycle_times, description):
+def create_json_for_flowchart(codice, phases, cycle_times, description, phaseTargetQueue):
         element_ids = [str(ObjectId()) for _ in phases]
         dashboard_elements = []
-        for i, (phase, time) in enumerate(zip(phases, cycle_times)):
+        for i, (phase, time, phaseTargetQueue) in enumerate(zip(phases, cycle_times, phaseTargetQueue)):
             element = {
                 "positionDx": 101.2 + 200 * i,
                 "positionDy": 240.2,
                 "size.width": 100.0, 
                 "size.height": 50.0,
                 "text": phase,
+                "phaseTargetQueue": phaseTargetQueue,
                 "textColor": 4278190080,
                 "fontFamily": None,
                 "textSize": 12.0,
@@ -784,11 +785,12 @@ class MainWindow(QMainWindow):
             fasi = group['FaseOperativo'].tolist()
             lt_fase = group['LTFase'].tolist()
             tempo_ciclo = group['Tempo Ciclo'].tolist()
+            lead_time = [4800 if item == "Taglio" else 480 for item in tempo_ciclo]
             qta = group['Qta'].iloc[0]
             description = group['Descrizione'].iloc[0] + " " + " ".join(group['Accessori'].dropna().unique())
 
             print(f"Creating and uploading JSON for Codice: {codice}")
-            json_object = create_json_for_flowchart(codice, fasi, tempo_ciclo, description)
+            json_object = create_json_for_flowchart(codice, fasi, tempo_ciclo, description, lead_time)
 
             processed_data['Codice'].append(codice)
             processed_data['Fasi'].append(fasi)

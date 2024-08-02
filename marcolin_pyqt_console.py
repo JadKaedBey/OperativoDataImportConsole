@@ -634,9 +634,12 @@ class MainWindow(QMainWindow):
                                      QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
         if reply == QMessageBox.Yes:
             try:
-                db = client['processes_db']
+                db = client['process_db']
                 collection = db['famiglie_di_prodotto']
-                collection.delete_many({})
+                
+                print("Deleting documents in the collection...")
+                result = collection.delete_many({})
+                print(f"Deleted {result.deleted_count} documents.")
                 self.clear_data()
                 QMessageBox.information(self, "Success", "The database has been wiped.")
             except Exception as e:
@@ -762,7 +765,7 @@ class MainWindow(QMainWindow):
             lt_fase = group['LTFase'].tolist()
             tempo_ciclo = group['Tempo Ciclo'].tolist()
             qta = group['Qta'].iloc[0]
-            description = group['Descrizione'].iloc[0] + " " + " ".join(group['Accessori'].dropna().unique())
+            description = group['Descrizione'].iloc[0] + " " + " ".join(map(str, group['Accessori'].dropna().unique()))
 
             print(f"Creating and uploading JSON for Codice: {codice}")
             json_object = create_json_for_flowchart(codice, fasi, tempo_ciclo, description, lt_fase)

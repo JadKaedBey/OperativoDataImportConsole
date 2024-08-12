@@ -124,17 +124,16 @@ def find_start_date_of_phase(end_date, target_phase, quantity, open_time, holida
     return None
 
 
-def create_json_for_flowchart(codice, phases, cycle_times, description, phaseTargetQueue):
+def create_json_for_flowchart(codice, phases, cycle_times, description):
         element_ids = [str(ObjectId()) for _ in phases]
         dashboard_elements = []
-        for i, (phase, time, phaseTargetQueue) in enumerate(zip(phases, cycle_times, phaseTargetQueue)):
+        for i, (phase, time) in enumerate(zip(phases, cycle_times)):
             element = {
                 "positionDx": 101.2 + 200 * i,
                 "positionDy": 240.2,
                 "size.width": 100.0, 
                 "size.height": 50.0,
                 "text": phase,
-                "phaseTargetQueue": phaseTargetQueue,
                 "textColor": 4278190080,
                 "fontFamily": None,
                 "textSize": 12.0,
@@ -208,8 +207,39 @@ def create_json_for_flowchart(codice, phases, cycle_times, description, phaseTar
         }
         return json_output
     
+def map_phases(phase_string):
+    # Define the mappings
+    phase_mappings = {
+        'lavmec': 'Filettatura/Foratura',
+        'lav mecc': 'Filettatura/Foratura',
+        'taglio': 'Taglio',
+        'piega': 'Piega 1',
+        'smerigliatura/insertaggio': 'Smerigliatura',
+        'saldatura': 'Saldatura'
+    }
+    
+    # Split the phase string into individual phases
+    separators = ['-', '+']
+    for sep in separators:
+        if sep in phase_string:
+            phases = phase_string.split(sep)
+            break
+    else:
+        phases = [phase_string]  # If no separator is found, treat as a single phase
+    
+    # Map the phases using the predefined mappings
+    mapped_phases = []
+    for phase in phases:
+        phase = phase.strip()
+        for key in phase_mappings:
+            if key in phase:
+                mapped_phases.append(phase_mappings[key])
+                break
+    
+    return mapped_phases
+    
 def upload_orders_from_xlsx_amade(xlsx_path):
-    global client  # Ensure we're using the global MongoDB client
+    global client  # Ensure using the global MongoDB client
     db = client['orders_db']
     collection = db['ordini']
     nesting_collection = db['nesting']
@@ -224,7 +254,7 @@ def upload_orders_from_xlsx_amade(xlsx_path):
     for order_id, group in grouped:
         for idx, (_, row) in enumerate(group.iterrows(), start=1):
             # Extract necessary data from the row
-            codice_articolo = row['Cod.']
+            codice_articolo = row['Cod. Articolo']
             descrizione = row['Descrizione']
             quantita = row['Q.tà']
             end_date = row['D.Cons.Interna'] #, '%Y-%m-%d'
@@ -235,7 +265,8 @@ def upload_orders_from_xlsx_amade(xlsx_path):
             descrizione_completa = f"{descrizione} Spessori: {' '.join(spessori)}" if spessori else descrizione
 
             # Assuming the 'phases' are predefined or extracted from another source
-            phases = ["Taglio" , "Piega 1", "Filettatura/Foratura"] #get_procedure_phases_by_prodId(codice_articolo)
+            raw_phases = row['Fasi']
+            phases = map_phases(raw_phases)
             
             # temporary fix finchè tutti i codici saranno inseriti
 
@@ -431,8 +462,6 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(self.central_widget)
         self.layout = QVBoxLayout(self.central_widget)
 
-
-
         self.adjust_sizes()
 
         # Add company logo
@@ -442,18 +471,21 @@ class MainWindow(QMainWindow):
         self.layout.addWidget(self.logo_label, alignment=Qt.AlignCenter)
 
         # Buttons
-        self.queue_button = QPushButton("Queue Data")
-        self.clear_button = QPushButton("Clear Queued Data")
-        self.upload_button = QPushButton("Upload Queued Data")
+        # self.queue_button = QPushButton("Queue Data")
+        # self.clear_button = QPushButton("Clear Queued Data")
+        # self.upload_button = QPushButton("Upload Queued Data")
         self.upload_orders_button_amade = QPushButton("Upload Orders Amade")
         self.upload_button.setStyleSheet("background-color: green; color: white;")
-        self.upload_famiglie = QPushButton("Upload Flussi (Famiglie)")
-        self.upload_famiglie.setStyleSheet("background-color: red; color: white;")
+        self.upload_famiglie_button = QPushButton("Upload Flussi (Famiglie)")
+        self.upload_famiglie_button.setStyleSheet("background-color: red; color: white;")
         self.export_button = QPushButton("Export Data")
+        self.utenti_qr_code_button = QPushButton("Generate Operatori QR Codes")
+        self.order_qr_button = QPushButton("Generate Order QR Codes")
 
         # Setup font
         font = QFont("Proxima Nova", 12)
-        for button in [self.queue_button, self.clear_button, self.upload_button, self.upload_famiglie, self.export_button]:
+        for button in [self.upload_famiglie_button, self.export_button, self.upload_orders_button_amade, self.upload_famiglie_button, 
+                       self.export_button, self.utenti_qr_code_button]:
             button.setFont(font)
             button.setFixedSize(350, 50)
 
@@ -464,50 +496,37 @@ class MainWindow(QMainWindow):
         right_layout = QHBoxLayout()
 
         # Add buttons to layouts
-        center_layout.addWidget(self.queue_button)
-        center_layout.addWidget(self.clear_button)
-
-        center_layout.addWidget(self.upload_button)
-
-        center_layout.addWidget(self.upload_famiglie)
+        # center_layout.addWidget(self.queue_button)
+        # center_layout.addWidget(self.clear_button)
+        # center_layout.addWidget(self.upload_button)
+        center_layout.addWidget(self.upload_famiglie_button)
         center_layout.addWidget(self.export_button)
         center_layout.addWidget(self.upload_orders_button_amade)
+        center_layout.addWidget(self.utenti_qr_code_button)
+        center_layout.addWidget(self.order_qr_button)
 
         # Add stretches to center the center layout
         main_horizontal_layout.addLayout(left_layout)
         main_horizontal_layout.addLayout(center_layout)
         main_horizontal_layout.addLayout(right_layout)
-
         self.layout.addLayout(main_horizontal_layout)
+        
+        # BUTTON CONNECTIONS TO FUNCTIONS
         
         self.queue_button.clicked.connect(self.queue_data)
         self.clear_button.clicked.connect(self.clear_data)
         self.upload_button.clicked.connect(self.upload_queued_data)
-        self.upload_famiglie.clicked.connect(self.marcolin_import_famiglie)
+        self.upload_famiglie_button.clicked.connect(self.marcolin_import_famiglie)
         self.export_button.clicked.connect(self.select_database_and_collection)
-        
-        self.qr_code_button = QPushButton("Generate Operatori QR Codes")
-        self.qr_code_button.setFont(font)
-        self.qr_code_button.setFixedSize(350, 50)
-        self.qr_code_button.clicked.connect(self.generate_and_save_qr_codes)
-        center_layout.addWidget(self.qr_code_button)
-        
-        self.order_qr_button = QPushButton("Generate Order QR Codes")
-        self.order_qr_button.setFont(font)
-        self.order_qr_button.setFixedSize(350, 50)
+        self.utenti_qr_code_button.clicked.connect(self.generate_and_save_qr_codes)
         self.order_qr_button.clicked.connect(self.generate_order_qr_codes)
-        center_layout.addWidget(self.order_qr_button)
-
         self.upload_orders_button_amade.clicked.connect(self.upload_orders_amade)
-
-        # Table for CSV data
+        
+        # Table for CSV data - REDUNDANT TO BE REMOVED
         self.table = QTableWidget()
         self.layout.addWidget(self.table)
         
     def initialize_ui(self):
-        # Common setup code here
-
-        # Now, apply user-specific configurations:
         if self.user_role == "special_role":
             self.setup_special_user_ui()
         else:
@@ -732,9 +751,6 @@ class MainWindow(QMainWindow):
 
     
     def marcolin_import_famiglie(self):
-        # Spinoff of the upload function created in marcolin_import_&_json_test.py 
-        # Created for Legami_KB_officina from Marcolin
-        
         # Prompt the user to select an Excel file
         file_path, _ = QFileDialog.getOpenFileName(self, "Open Excel File", "", "Excel files (*.xlsx)")
         if not file_path:
@@ -759,49 +775,39 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "File Error", "Missing required columns: " + ", ".join(missing_columns))
             return
 
-        # Continue with data processing...
         output_directory = './output_jsons'
-        
+
         db_name = 'process_db'
         collection_name = 'famiglie_di_prodotto'
-        # here client is a global variable, so no need to specify the string
         db = client[db_name]
         collection = db[collection_name]
 
-        print("Reading the Excel file...")
-        df = pd.read_excel(file_path)
-
-        processed_data = {
-            'Codice': [],
-            'Fasi': [],
-            'LT Fase Array': [],
-            'Tempo Ciclo Array': [],
-            'QTA': [],
-            'Description': [],
-        }
-
         print("Processing data...")
+        success_count = 0
+        error_count = 0
+        errors = []
         for codice, group in df.groupby('Codice'):
-            fasi = group['FaseOperativo'].tolist()
-            lt_fase = group['LTFase'].tolist()
-            tempo_ciclo = group['Tempo Ciclo'].tolist()
-            lead_time = [4800 if item == "Taglio" else 480 for item in tempo_ciclo]
-            qta = group['Qta'].iloc[0]
-            description = group['Descrizione'].iloc[0] + " " + " ".join(group['Accessori'].dropna().unique())
+            try:
+                fasi = group['FaseOperativo'].tolist()
+                lt_fase = group['LTFase'].tolist()
+                tempo_ciclo = group['Tempo Ciclo'].tolist()
+                qta = group['Qta'].iloc[0]
+                description = group['Descrizione'].iloc[0] + " " + " ".join(group['Accessori'].dropna().unique())
 
-            print(f"Creating and uploading JSON for Codice: {codice}")
-            json_object = create_json_for_flowchart(codice, fasi, tempo_ciclo, description, lead_time)
+                print(f"Creating and uploading JSON for Codice: {codice}")
+                json_object = create_json_for_flowchart(codice, fasi, tempo_ciclo, description)
 
-            processed_data['Codice'].append(codice)
-            processed_data['Fasi'].append(fasi)
-            processed_data['LT Fase Array'].append(lt_fase)
-            processed_data['Tempo Ciclo Array'].append(tempo_ciclo)
-            processed_data['QTA'].append(qta)
-            processed_data['Description'].append(description)
+                # Upload JSON object directly to MongoDB
+                collection.insert_one(json_object)
+                print(f"Uploaded JSON for Codice: {codice} to MongoDB")
+                success_count += 1
+            except Exception as e:
+                print(f"Error encountered with family {codice}: {e}")
+                errors.append(codice)
+                error_count += 1
 
-            # Upload JSON object directly to MongoDB
-            collection.insert_one(json_object)
-            print(f"Uploaded JSON for Codice: {codice} to MongoDB")
+        summary_message = f"{success_count} families uploaded successfully, {error_count} failed: {', '.join(errors)}"
+        QMessageBox.information(self, "Upload Summary", summary_message)
 
         # TESTING: 
         # print("Exporting data to Excel...")

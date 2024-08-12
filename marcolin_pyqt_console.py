@@ -344,20 +344,21 @@ class MainWindow(QMainWindow):
         self.layout.addLayout(self.logo_layout)
 
         # Buttons
-        self.queue_button = QPushButton("Queue Data")
-        self.clear_button = QPushButton("Clear Queued Data")
-        self.upload_button = QPushButton("Upload Queued Data")
-        self.upload_button.setStyleSheet("background-color: green; color: white;")
+        # self.queue_button = QPushButton("Queue Data")
+        # self.clear_button = QPushButton("Clear Queued Data")
+        # self.upload_button = QPushButton("Upload Queued Data")
+        # self.upload_button.setStyleSheet("background-color: green; color: white;")
         self.wipe_button = QPushButton("Wipe Flussi Database")
-        self.wipe_button.setStyleSheet("background-color: red; color: white;")
         self.export_button = QPushButton("Export Data")
         self.family_upload_button = QPushButton("Upload Famiglie (Flussi)")
         self.utenti_qr_code_button = QPushButton("Generate Operatori QR Codes")
         self.order_qr_code_button = QPushButton("Generate Orders QR Codes")
+        self.upload_orders_button = QPushButton("Upload Orders")
+
 
         # Setup font
         font = QFont("Proxima Nova", 12)
-        for button in [self.queue_button, self.clear_button, self.upload_button, self.wipe_button, self.export_button, self.family_upload_button]:
+        for button in [self.wipe_button, self.export_button, self.family_upload_button, self.order_qr_code_button, self.utenti_qr_code_button, self.upload_orders_button]:
             button.setFont(font)
             button.setFixedSize(350, 50)
 
@@ -368,16 +369,17 @@ class MainWindow(QMainWindow):
         right_layout = QHBoxLayout()
 
         # Add buttons to layouts
-        center_layout.addWidget(self.queue_button)
-        center_layout.addWidget(self.clear_button)
+        # center_layout.addWidget(self.queue_button)
+        # center_layout.addWidget(self.clear_button)
 
-        center_layout.addWidget(self.upload_button)
+        # center_layout.addWidget(self.upload_button)
 
         center_layout.addWidget(self.wipe_button)
         center_layout.addWidget(self.export_button)
         center_layout.addWidget(self.family_upload_button)
         center_layout.addWidget(self.utenti_qr_code_button)
         center_layout.addWidget(self.order_qr_code_button)
+        center_layout.addWidget(self.upload_orders_button)
         
         # Add stretches to center the center layout
         main_horizontal_layout.addLayout(left_layout)
@@ -386,24 +388,24 @@ class MainWindow(QMainWindow):
 
         self.layout.addLayout(main_horizontal_layout)
         
-        self.queue_button.clicked.connect(self.queue_data)
-        self.clear_button.clicked.connect(self.clear_data)
-        self.upload_button.clicked.connect(self.upload_queued_data)
+        # Special Styling
+        self.wipe_button.setStyleSheet("background-color: red; color: white;") # RED WIPE BUTTON
+        self.upload_orders_button.setStyleSheet("background-color: blue; color: white;") # BLUE UPLOAD BUTTON
+        
+        
+        # BUTTON CONNECTIVITY TO FUNCTIONS
+        
+        # self.queue_button.clicked.connect(self.queue_data)
+        # self.clear_button.clicked.connect(self.clear_data)
+        # self.upload_button.clicked.connect(self.upload_queued_data)
         self.wipe_button.clicked.connect(self.wipe_database)
         self.export_button.clicked.connect(self.select_database_and_collection)
         self.family_upload_button.clicked.connect(self.marcolin_import_famiglie)
         self.utenti_qr_code_button.clicked.connect(self.generate_and_save_qr_codes)
         self.order_qr_code_button.clicked.connect(self.generate_order_qr_codes)
-
-
-        self.upload_orders_button = QPushButton("Upload Orders")
-        self.upload_orders_button.setFont(font)
-        self.upload_orders_button.setFixedSize(350, 50)
-        self.upload_orders_button.setStyleSheet("background-color: blue; color: white;")
         self.upload_orders_button.clicked.connect(self.upload_orders_data)
 
-        center_layout.addWidget(self.upload_orders_button)
-        # Table for CSV data
+        # Table for CSV data REDUNDANT - TO REMOVE
         self.table = QTableWidget()
         self.layout.addWidget(self.table)
         
@@ -416,7 +418,7 @@ class MainWindow(QMainWindow):
             for document in collection.find():
                 name = document.get('nome', 'UnknownName')
                 surname = document.get('cognome', 'UnknownSurname')
-                password = document.get('password', 'NoPassword')  # Assuming 'password' is the field name in your database
+                password = document.get('password', 'NoPassword') 
                 qr_data = f"{name}||{surname}||{password}"  # Format the data as required by the new QR code system
                 filename = f"{name}_{surname}.png"
                 self.generate_qr(qr_data, filename, name, surname)  # Pass the name and surname to the QR generation function
@@ -578,30 +580,28 @@ class MainWindow(QMainWindow):
                     self.table.setItem(i, j, QTableWidgetItem(str(queued_df.iat[i, j])))
                     
     def upload_orders_data(self):
-        # Trigger the file dialog to select an Excel file
         filename, _ = QFileDialog.getOpenFileName(self, "Open Excel File", "", "Excel files (*.xlsx)")
         if filename:
             try:
-                # Read data from Excel and create orders
                 orders = create_orders_objects(filename)
+                success_count = 0
+                error_count = 0
+                errors = []
+                for order in orders:
+                    try:
+                        order_upload_to_mongodb([order], client, "orders_db", "ordini")
+                        print(f"Order {order['orderId']} was uploaded successfully")
+                        success_count += 1
+                    except Exception as e:
+                        print(f"Error encountered with order {order['orderId']}: {e}")
+                        errors.append(order['orderId'])
+                        error_count += 1
 
-                # Optionally save to JSON or upload to MongoDB
-                # json_file_name = 'orders.json'
-                # save_orders_to_json(orders, json_file_name)
-
-                # Optionally upload to MongoDB
-                order_upload_to_mongodb(orders, client, "orders_db", "ordini")
-
-                QMessageBox.information(self, "Success", "Orders have been processed and uploaded.")
+                summary_message = f"{success_count} orders uploaded successfully, {error_count} failed: {', '.join(errors)}"
+                QMessageBox.information(self, "Upload Summary", summary_message)
             except Exception as e:
                 QMessageBox.critical(self, "Error", f"Failed to process orders: {e}")
                 
-    # def save_orders_to_json(orders, file_name):
-    # # Convert the orders list to JSON format and write to a file
-    #     with open(file_name, 'w') as f:
-    #         json.dump(orders, f, indent=4, default=str)  # `default=str` to handle non-serializable data like ObjectId and datetime
-    # print(f"Orders have been saved to {file_name}")
-        
     def upload_queued_data(self):
         global queued_df
         print("Attempting to upload data...")
@@ -712,10 +712,6 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Export Failed", f"Failed to export data: {e}")
             
     def marcolin_import_famiglie(self):
-        # Spinoff of the upload function created in marcolin_import_&_json_test.py 
-        # Created for Legami_KB_officina from Marcolin
-        
-        # Prompt the user to select an Excel file
         file_path, _ = QFileDialog.getOpenFileName(self, "Open Excel File", "", "Excel files (*.xlsx)")
         if not file_path:
             QMessageBox.warning(self, "File Selection", "No file selected.")
@@ -726,13 +722,11 @@ class MainWindow(QMainWindow):
             return
 
         try:
-            # Reading the Excel file
             df = pd.read_excel(file_path)
         except Exception as e:
             QMessageBox.critical(self, "File Error", f"Failed to read the Excel file: {e}")
             return
 
-        # Check if required columns are present in the DataFrame
         required_columns = {'Codice', 'FaseOperativo', 'LTFase', 'Tempo Ciclo', 'Qta', 'Descrizione', 'Accessori'}
         if not required_columns.issubset(df.columns):
             missing_columns = required_columns - set(df.columns)
@@ -743,7 +737,6 @@ class MainWindow(QMainWindow):
         
         db_name = 'process_db'
         collection_name = 'famiglie_di_prodotto'
-        # here client is a global variable, so no need to specify the string
         db = client[db_name]
         collection = db[collection_name]
 
@@ -760,31 +753,37 @@ class MainWindow(QMainWindow):
         }
 
         print("Processing data...")
+        success_count = 0
+        error_count = 0
+        errors = []
         for codice, group in df.groupby('Codice'):
-            fasi = group['FaseOperativo'].tolist()
-            lt_fase = group['LTFase'].tolist()
-            tempo_ciclo = group['Tempo Ciclo'].tolist()
-            qta = group['Qta'].iloc[0]
-            description = group['Descrizione'].iloc[0] + " " + " ".join(map(str, group['Accessori'].dropna().unique()))
+            try:
+                fasi = group['FaseOperativo'].tolist()
+                lt_fase = group['LTFase'].tolist()
+                tempo_ciclo = group['Tempo Ciclo'].tolist()
+                qta = group['Qta'].iloc[0]
+                description = group['Descrizione'].iloc[0] + " " + " ".join(map(str, group['Accessori'].dropna().unique()))
 
-            print(f"Creating and uploading JSON for Codice: {codice}")
-            json_object = create_json_for_flowchart(codice, fasi, tempo_ciclo, description, lt_fase)
+                print(f"Creating and uploading JSON for Codice: {codice}")
+                json_object = create_json_for_flowchart(codice, fasi, tempo_ciclo, description, lt_fase)
 
-            processed_data['Codice'].append(codice)
-            processed_data['Fasi'].append(fasi)
-            processed_data['LT Fase Array'].append(lt_fase)
-            processed_data['Tempo Ciclo Array'].append(tempo_ciclo)
-            processed_data['QTA'].append(qta)
-            processed_data['Description'].append(description)
+                processed_data['Codice'].append(codice)
+                processed_data['Fasi'].append(fasi)
+                processed_data['LT Fase Array'].append(lt_fase)
+                processed_data['Tempo Ciclo Array'].append(tempo_ciclo)
+                processed_data['QTA'].append(qta)
+                processed_data['Description'].append(description)
 
-            # Upload JSON object directly to MongoDB
-            collection.insert_one(json_object)
-            print(f"Uploaded JSON for Codice: {codice} to MongoDB")
+                collection.insert_one(json_object)
+                print(f"Family {codice} was uploaded successfully")
+                success_count += 1
+            except Exception as e:
+                print(f"Error encountered with family {codice}: {e}")
+                errors.append(codice)
+                error_count += 1
 
-        # TESTING: 
-        # print("Exporting data to Excel...")
-        # output_df = pd.DataFrame(processed_data)
-        # output_df.to_excel(os.path.join(output_directory, 'formatted_output.xlsx'), index=False)
+        summary_message = f"{success_count} families uploaded successfully, {error_count} failed: {', '.join(errors)}"
+        QMessageBox.information(self, "Upload Summary", summary_message)
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)

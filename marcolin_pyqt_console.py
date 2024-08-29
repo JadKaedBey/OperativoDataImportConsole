@@ -120,7 +120,6 @@ def order_upload_to_mongodb(orders, db_url, db_name, collection_name):
         collection = db[collection_name]
         result = collection.insert_many(orders)
         print(f"Inserted Order IDs: {result.inserted_ids}")
-        client.close()
 
 def connect_to_mongodb(username, password):
     global client

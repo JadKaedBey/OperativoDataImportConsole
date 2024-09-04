@@ -15,14 +15,13 @@ from bson import ObjectId
 from dotenv import load_dotenv
 
 
-# Initialize global variable
 queued_df = pd.DataFrame()
-client = None  # Initialize client variable
-login_logo = Image.open(r".\OPERATIVO_L_Main_Color.png")
+client = None  # Initialize MongoDB client variable
+login_logo = Image.open(r".\img\OPERATIVO_L_Main_Color.png")
 login_logo_width = 1654
 login_logo_length = 1246
 
-original_logo = Image.open(r".\OPERATIVO_L_Main_Color.png") 
+original_logo = login_logo
 original_logo_width = 1654
 original_logo_length = 1246
 
@@ -237,62 +236,114 @@ def map_phases(phase_string):
                 break
     
     return mapped_phases
-    
+        
 def upload_orders_from_xlsx_amade(xlsx_path):
-    global client  # Ensure using the global MongoDB client
+    global client 
     db = client['orders_db']
-    collection = db['ordini']
-    nesting_collection = db['nesting']
+    famiglie_collection = client['process_db']['famiglie_di_prodotto'] 
 
     # Load the Excel file
-    df = pd.read_excel(xlsx_path)
+    xls = pd.ExcelFile(xlsx_path)
+    
+    # Process the "Articoli" sheet
+    articoli_df = pd.read_excel(xls, sheet_name='Articoli')
 
-    # Group by 'ordine' to handle multiple rows with the same order ID
-    grouped = df.groupby('Ordine')
+    # Create a structure to store family and codice articolo information
+    family_dict = {}
+    articoli_codici = {}
 
-    # Process each group of rows with the same order ID
-    for order_id, group in grouped:
-        for idx, (_, row) in enumerate(group.iterrows(), start=1):
-            # Extract necessary data from the row
-            codice_articolo = row['Cod. Articolo']
-            descrizione = row['Descrizione']
-            quantita = row['Q.tà']
-            end_date = row['D.Cons.Interna'] #, '%Y-%m-%d'
-            customer_deadline = row['D.Cons.Interna'] #, '%Y-%m-%d'
-            
-            # Construct the description with Spessori
-            spessori = [f"{col}: {row[col]}" for col in df.columns if col.endswith('_SP') and not pd.isna(row[col])]
-            descrizione_completa = f"{descrizione} Spessori: {' '.join(spessori)}" if spessori else descrizione
-
-            # Assuming the 'phases' are predefined or extracted from another source
-            raw_phases = row['Fasi']
-            phases = map_phases(raw_phases)
-            
-            # temporary fix finchè tutti i codici saranno inseriti
-
-            # Create order object
-            order_object = create_order_object_with_dates(
-                phases, codice_articolo, quantita, f"{order_id}.{idx}",
-                end_date, customer_deadline
-            )
-            order_object['orderDescription'] = descrizione_completa
-
-             # Check if there are any _SP columns with non-zero values
-            tagli = [row[col] for col in df.columns if col.endswith('_SP') and row[col] != 0 and not pd.isna(row[col]) and (isinstance(row[col], (int, float)) and row[col] != 0 or isinstance(row[col], str) and row[col].strip())]
-            if tagli:
-                nesting_object = {
-                    "codiceArticolo": f"{order_id}.{idx}",
-                    "tagli": [str(value) for value in tagli]
-                }
-            
-                nesting_collection.insert_one(nesting_object)
-                print(f"Nesting object for order {order_id}.{idx} uploaded.")
-            # Insert the order object into MongoDB
-            collection.insert_one(order_object)
-            print(f"Order {order_id}.{idx} uploaded.")
-
-    print("All orders have been uploaded.")
+    # Retrieve families from the database
+    families_from_db = famiglie_collection.find()
+    
+    for family in families_from_db:
+        family_title = family['titolo']
+        catalogo = family.get('catalogo', [])
         
+        # Store all family titles locally
+        family_dict[family_title] = True
+        
+        for item in catalogo:
+            codice_articolo = item['prodId']
+            articoli_codici[codice_articolo] = family_title
+
+    # Check if the "Codice Articolo" and "Famiglia di Prodotto" are present in the database
+    articoli_checks = []
+    for idx, row in articoli_df.iterrows():
+        codice_articolo = row['Codice Articolo']
+        famiglia = row['Famiglia di prodotto']
+        
+        # Check if the family exists in the local structure
+        famiglia_exists = family_dict.get(famiglia, False)
+        
+        # Check if the codice_articolo exists and what family it belongs to
+        codice_exists = articoli_codici.get(codice_articolo, None)
+
+        articoli_checks.append({
+            'Codice': codice_articolo,
+            'Famiglia': famiglia,
+            'FamigliaExists': famiglia_exists,
+            'CodiceExists': codice_exists is not None,
+            'BelongsTo': codice_exists
+        })
+
+    # Process the "Ordini" sheet
+    ordini_df = pd.read_excel(xls, sheet_name='Ordini')
+
+    # Store order upload results
+    successful_orders = []
+    failed_orders = []
+
+    # Loop through each row in the "Ordini" sheet
+    for idx, row in ordini_df.iterrows():
+        ordine_id = row['Id Ordine']
+        codice_articolo = row['Codice Articolo'] 
+        qta = row['QTA']
+        data_richiesta = row['Data Richiesta']
+        
+        # Check if the Codice Articolo is present in the structure
+        codice_info = next((item for item in articoli_checks if item['Codice'] == codice_articolo), None)
+        
+        if codice_info and codice_info['CodiceExists']:
+            # Create the order and upload it to MongoDB (in the correct database and collection)
+            order_object = {
+                'ordineId': ordine_id,
+                'codiceArticolo': codice_articolo,
+                'quantita': qta,
+                'dataRichiesta': data_richiesta,
+            }
+            db['ordini'].insert_one(order_object)  # Insert into 'orders_db.ordini' collection
+            successful_orders.append(ordine_id)
+        else:
+            failed_orders.append({
+                'ordineId': ordine_id,
+                'codiceArticolo': codice_articolo
+            })
+    
+    # Show a report to the user
+    show_upload_report(successful_orders, failed_orders)
+
+
+def show_upload_report(successful_orders, failed_orders):
+    report_message = "Upload Report:\n\n"
+
+    if successful_orders:
+        report_message += "Successfully uploaded orders:\n"
+        report_message += "\n".join([str(order) for order in successful_orders])
+        report_message += "\n\n"
+
+    if failed_orders:
+        report_message += "Failed to upload orders (Missing Codice Articolo):\n"
+        for failed in failed_orders:
+            report_message += f"Order ID: {failed['ordineId']}, Codice Articolo: {failed['codiceArticolo']}\n"
+
+    # Show the message in a popup dialog
+    QMessageBox.information(None, "Upload Report", report_message)
+
+def check_missing_families(articoli_checks):
+    missing_families = [check['Famiglia'] for check in articoli_checks if not check['FamigliaExists']]
+    
+    if missing_families:
+        QMessageBox.warning(None, "Missing Families", "The following families are missing in the database:\n" + "\n".join(missing_families))
 
 def create_order_object_with_dates(phases, codice_articolo, quantita, order_id, end_date, customer_deadline):
     settings = fetch_settings()
@@ -356,7 +407,6 @@ def create_order_object_with_dates(phases, codice_articolo, quantita, order_id, 
     
     return order_object
 
-
 def get_procedure_phases_by_prodId(prodId):
     # Connect to the MongoDB database
     db = client['process_db']
@@ -385,7 +435,6 @@ def get_procedure_phases_by_prodId(prodId):
     
     return phases
 
-
 class LoginWindow(QDialog):
     def __init__(self, parent=None):
         super(LoginWindow, self).__init__(parent)
@@ -398,7 +447,7 @@ class LoginWindow(QDialog):
 
         # Add company logo
         self.logo_label = QLabel(self)
-        self.pixmap = QPixmap(r".\OPERATIVO_L_Main_Color.png")
+        self.pixmap = QPixmap(r".\img\OPERATIVO_L_Main_Color.png")
         self.logo_label.setPixmap(self.pixmap.scaled(1200, 300, Qt.KeepAspectRatio))
         layout.addWidget(self.logo_label, alignment=Qt.AlignCenter)
 
@@ -466,7 +515,7 @@ class MainWindow(QMainWindow):
 
         # Add company logo
         self.logo_label = QLabel(self)
-        self.pixmap = QPixmap(r".\OPERATIVO_L_Main_Color.png")
+        self.pixmap = QPixmap(r".\img\OPERATIVO_L_Main_Color.png")
         self.logo_label.setPixmap(self.pixmap.scaled(2400, 600, Qt.KeepAspectRatio))
         self.layout.addWidget(self.logo_label, alignment=Qt.AlignCenter)
 
@@ -474,8 +523,8 @@ class MainWindow(QMainWindow):
         # self.queue_button = QPushButton("Queue Data")
         # self.clear_button = QPushButton("Clear Queued Data")
         # self.upload_button = QPushButton("Upload Queued Data")
+        # self.upload_button.setStyleSheet("background-color: green; color: white;")
         self.upload_orders_button_amade = QPushButton("Upload Orders Amade")
-        self.upload_button.setStyleSheet("background-color: green; color: white;")
         self.upload_famiglie_button = QPushButton("Upload Flussi (Famiglie)")
         self.upload_famiglie_button.setStyleSheet("background-color: red; color: white;")
         self.export_button = QPushButton("Export Data")
@@ -513,9 +562,9 @@ class MainWindow(QMainWindow):
         
         # BUTTON CONNECTIONS TO FUNCTIONS
         
-        self.queue_button.clicked.connect(self.queue_data)
-        self.clear_button.clicked.connect(self.clear_data)
-        self.upload_button.clicked.connect(self.upload_queued_data)
+        # self.queue_button.clicked.connect(self.queue_data)
+        # self.clear_button.clicked.connect(self.clear_data)
+        # self.upload_button.clicked.connect(self.upload_queued_data)
         self.upload_famiglie_button.clicked.connect(self.marcolin_import_famiglie)
         self.export_button.clicked.connect(self.select_database_and_collection)
         self.utenti_qr_code_button.clicked.connect(self.generate_and_save_qr_codes)
@@ -737,18 +786,15 @@ class MainWindow(QMainWindow):
                 QMessageBox.critical(self, "Wipe Failed", f"Failed to wipe database: {e}")
                 
     
+    # today
 
     def upload_orders_amade(self):
-        # You may choose to use QFileDialog here if you want to let the user select the XLSX each time
         filename, _ = QFileDialog.getOpenFileName(self, "Open XLSX File", "", "Excel files (*.xlsx)")
         if filename:
             upload_orders_from_xlsx_amade(filename)
-            QMessageBox.information(self, "Upload Complete", "All orders have been successfully uploaded.")
+            QMessageBox.information(self, "Upload Complete", "Order upload process completed.")
         else:
             QMessageBox.warning(self, "No File Selected", "Please select an Excel file to upload.")
-
-
-
     
     def marcolin_import_famiglie(self):
         # Prompt the user to select an Excel file

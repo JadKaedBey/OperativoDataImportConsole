@@ -19,16 +19,120 @@ load_dotenv()
 # Initialize global variable
 queued_df = pd.DataFrame()
 client = None  # Initialize client variable
-login_logo = Image.open(r".\OPERATIVO_L_Main_Color.png")
+login_logo = Image.open(r".\img\OPERATIVO_L_Main_Color.png")
 login_logo_width = 1654
 login_logo_length = 1246
 
-original_logo = Image.open(r".\OPERATIVO_L_Main_Color.png") 
-original_logo_width = 1654
+original_logo = login_logo
 original_logo_length = 1246
 
 window_width = 1600
 window_height = 1600
+
+def process_articoli_sheet(articoli_df, db):
+    family_collection = db['famiglie_di_prodotto']
+    all_families = family_collection.find()
+    
+    # Create family and product mappings from the DB
+    family_mapping = {}
+    product_mapping = {}
+    
+    for family in all_families:
+        titolo = family['titolo']
+        family_mapping[titolo] = family
+        for product in family['catalogo']:
+            product_mapping[product['prodId']] = titolo
+    
+    # Iterate through the articoli sheet and check against the DB mappings
+    missing_families = []
+    article_check = []
+    
+    for index, row in articoli_df.iterrows():
+        codice_articolo = row['Codice Articolo']
+        famiglia = row['Famiglia di prodotto']
+        
+        if famiglia not in family_mapping:
+            missing_families.append(famiglia)
+        else:
+            article_check.append({
+                'Codice Articolo': codice_articolo,
+                'Famiglia': famiglia,
+                'Present': codice_articolo in product_mapping
+            })
+    
+    return article_check, missing_families
+
+def process_ordini_sheet(ordini_df, article_check, db):
+    orders_collection = db['ordini']
+    
+    successful_orders = []
+    failed_orders = []
+    
+    # Iterate through the orders sheet and validate against articoli checks
+    for index, row in ordini_df.iterrows():
+        codice_articolo = row['Codice Articolo']
+        order_id = row['Id Ordine']
+        
+        # Find the corresponding articolo check
+        articolo = next((a for a in article_check if a['Codice Articolo'] == codice_articolo), None)
+        
+        if articolo and articolo['Present']:
+            # Create the order in MongoDB
+            order = {
+                "orderId": str(order_id),
+                "codiceArticolo": codice_articolo,
+                "quantita": row['QTA'],
+                "dataRichiesta": row['Data Richiesta'],
+                "infoAggiuntive": row['Info aggiuntive']
+            }
+            try:
+                orders_collection.insert_one(order)
+                successful_orders.append(order_id)
+            except Exception as e:
+                print(f"Error uploading order {order_id}: {e}")
+                failed_orders.append((order_id, codice_articolo))
+        else:
+            failed_orders.append((order_id, codice_articolo))
+    
+    return successful_orders, failed_orders
+
+def display_report(successful_orders, failed_orders):
+    success_message = f"Successfully uploaded {len(successful_orders)} orders."
+    failure_message = f"Failed to upload {len(failed_orders)} orders."
+    
+    report = success_message + "\n\n" + failure_message + "\n\n"
+    if failed_orders:
+        report += "Failed orders (Order ID, Codice Articolo):\n"
+        for order in failed_orders:
+            report += f"{order[0]}, {order[1]}\n"
+    
+    QMessageBox.information(None, "Upload Report", report)
+
+def process_excel(self):
+    file_path, _ = QFileDialog.getOpenFileName(self, "Open Excel File", "", "Excel files (*.xlsx)")
+    if not file_path:
+        return
+
+    try:
+        excel_file = pd.ExcelFile(file_path)
+        articoli_df = excel_file.parse("Articoli")
+        ordini_df = excel_file.parse("Ordini")
+
+        # Step 1: Process Articoli
+        article_check, missing_families = process_articoli_sheet(articoli_df, self.db)
+        if missing_families:
+            QMessageBox.warning(self, "Missing Families", f"The following families are missing: {', '.join(missing_families)}")
+            return
+        
+        # Step 2: Process Ordini
+        successful_orders, failed_orders = process_ordini_sheet(ordini_df, article_check, self.db)
+        
+        # Step 3: Display report
+        display_report(successful_orders, failed_orders)
+
+    except Exception as e:
+        QMessageBox.critical(self, "Error", f"An error occurred: {e}")
+
 
 def create_json_for_flowchart(codice, phases, cycle_times, description, phaseTargetQueue):
         element_ids = [str(ObjectId()) for _ in phases]
@@ -258,7 +362,7 @@ class LoginWindow(QDialog):
 
         # Add company logo
         self.logo_label = QLabel(self)
-        self.pixmap = QPixmap(r".\OPERATIVO_L_Main_Color.png")
+        self.pixmap = QPixmap(r".\img\OPERATIVO_L_Main_Color.png")
         self.logo_label.setPixmap(self.pixmap.scaled(1200, 300, Qt.KeepAspectRatio))
         layout.addWidget(self.logo_label, alignment=Qt.AlignCenter)
 
@@ -329,7 +433,7 @@ class MainWindow(QMainWindow):
         self.qr_save_path = "./QRs" 
         # Add company logo
         self.logo_label = QLabel(self)
-        self.pixmap = QPixmap(r".\OPERATIVO_L_Main_Color.png")
+        self.pixmap = QPixmap(r".\img\OPERATIVO_L_Main_Color.png")
         self.logo_label.setPixmap(self.pixmap.scaled(2400, 600, Qt.KeepAspectRatio))
         self.logo_layout.addWidget(self.logo_label, alignment=Qt.AlignCenter)
 
@@ -579,27 +683,37 @@ class MainWindow(QMainWindow):
                     self.table.setItem(i, j, QTableWidgetItem(str(queued_df.iat[i, j])))
                     
     def upload_orders_data(self):
+    # Step 1: Load the Excel file
         filename, _ = QFileDialog.getOpenFileName(self, "Open Excel File", "", "Excel files (*.xlsx)")
-        if filename:
-            try:
-                orders = create_orders_objects(filename)
-                success_count = 0
-                error_count = 0
-                errors = []
-                for order in orders:
-                    try:
-                        order_upload_to_mongodb([order], client, "orders_db", "ordini")
-                        print(f"Order {order['orderId']} was uploaded successfully")
-                        success_count += 1
-                    except Exception as e:
-                        print(f"Error encountered with order {order['orderId']}: {e}")
-                        errors.append(order['orderId'])
-                        error_count += 1
 
-                summary_message = f"{success_count} orders uploaded successfully, {error_count} failed: {', '.join(errors)}"
-                QMessageBox.information(self, "Upload Summary", summary_message)
-            except Exception as e:
-                QMessageBox.critical(self, "Error", f"Failed to process orders: {e}")
+        if not filename:
+            return  # Exit if no file is selected
+
+        try:
+            global client
+            # Step 2: Load the Excel file and parse the "Articoli" and "Ordini" sheets
+            excel_file = pd.ExcelFile(filename)
+            articoli_df = excel_file.parse("Articoli")
+            ordini_df = excel_file.parse("Ordini")
+
+            # Step 3: Process the "Articoli" sheet to check families and products in the database
+            article_check, missing_families = process_articoli_sheet(articoli_df, client["process_db"])
+
+            # If there are missing families, inform the user and stop the process
+            if missing_families:
+                QMessageBox.warning(self, "Missing Families", f"The following families are missing: {', '.join(missing_families)}")
+                return
+
+            # Step 4: Process the "Ordini" sheet and attempt to upload orders to MongoDB
+            successful_orders, failed_orders = process_ordini_sheet(ordini_df, article_check, client["orders_db"])
+
+            # Step 5: Display the final report (successful and failed uploads)
+            display_report(successful_orders, failed_orders)
+
+        except Exception as e:
+            # Handle any errors during the process and show a message to the user
+            QMessageBox.critical(self, "Error", f"Failed to process orders: {e}")
+
                 
     def upload_queued_data(self):
         global queued_df

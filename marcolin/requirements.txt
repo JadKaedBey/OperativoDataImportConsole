@@ -1,0 +1,6 @@
+PyQt5
+pandas
+pymongo
+Pillow
+qrcode
+python-dotenv

@@ -439,7 +439,7 @@ class MainWindow(QMainWindow):
 
         # Add new logo
         self.new_logo_label = QLabel(self)
-        self.new_pixmap = QPixmap(r"marcolin_logo.png")  # Adjust the path as necessary
+        self.new_pixmap = QPixmap(r"\img\marcolin_logo.png")  # Adjust the path as necessary
         self.new_logo_label.setPixmap(self.new_pixmap.scaled(2400, 600, Qt.KeepAspectRatio))  # Adjust size as needed
         self.logo_layout.addWidget(self.new_logo_label, alignment=Qt.AlignCenter)
 

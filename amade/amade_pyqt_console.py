@@ -17,13 +17,16 @@ from dotenv import load_dotenv
 
 queued_df = pd.DataFrame()
 client = None  # Initialize MongoDB client variable
-login_logo = Image.open(r".\img\OPERATIVO_L_Main_Color.png")
-login_logo_width = 1654
-login_logo_length = 1246
+try:
+    login_logo = Image.open(r".\img\OPERATIVO_L_Main_Color.png")
+except FileNotFoundError:
+    print("Image not found. Continuing with the rest of the script.")
+    login_logo = None
+        
+logo_width = 1654
+logo_length = 1246
 
 original_logo = login_logo
-original_logo_width = 1654
-original_logo_length = 1246
 
 window_width = 1600
 window_height = 1600
@@ -42,6 +45,8 @@ def connect_to_mongodb(username, password):
             client = MongoClient(os.getenv("MARCOLIN_URI"))
         elif username == "demo" and password == "demo":
             client = MongoClient(os.getenv("DEMO_URI"))
+        elif username == "demoveloce" and password == "demoveloce":
+            client = MongoClient(os.getenv("DEMO_VELOCE_URI"))
         else:
             print("Invalid credentials")
             return False
@@ -64,19 +69,40 @@ def fetch_settings():
     
     return settings
 
+# def get_procedure_phases_by_prodId(prodId):
+#     # Fetch the phases for a product ID from the process_db
+    
+#     process_db = client['process_db'] # sktchy
+    
+#     product = process_db['catalogo'].find_one({"prodId": prodId})
+#     print(product)
+#     if not product:
+#         raise ValueError(f"No document found with prodId {prodId}")
+    
+#     phases = [element.get('text') for element in product.get('dashboard', {}).get('elements', []) if 'text' in element]
+#     return phases
+
 def get_phase_end_times(phases):
-  
-    db = client['process_db']
-    collection = db['macchinari']
-    
-    phase_end_times = []
+    # Fetch the phase end times from the database
+    end_times = []
+    process_db = client['process_db']
     for phase in phases:
-        document = collection.find_one({"name": phase})
-        if not document:
-            raise ValueError(f"No document found for phase {phase}")
-        phase_end_times.append(int(document.get('queueTargetTime', 0)))  # Ensure it's an int
+        phase_info = process_db['macchinari'].find_one({"name": phase})
+        end_times.append(phase_info.get('queueTargetTime', 0) if phase_info else 0)
+    return end_times
+
+def calculate_phase_dates(end_date, phases, quantity, settings):
+    # Calculate the start dates for phases based on the logic from Flutter
+    entrata_coda_fase = []
+    phase_durations = get_phase_end_times(phases)
     
-    return phase_end_times
+    for i, phase in enumerate(phases):
+        # Placeholder logic for start date calculation
+        duration = phase_durations[i] * quantity
+        start_date = end_date - datetime.timedelta(minutes=duration)
+        entrata_coda_fase.append(start_date)
+    
+    return entrata_coda_fase
 
 def find_start_date_of_phase(end_date, target_phase, quantity, open_time, holiday_list, pausa_pranzo, graph, durations):
     def traverse_backwards(current_id):
@@ -122,6 +148,32 @@ def find_start_date_of_phase(end_date, target_phase, quantity, open_time, holida
             return possible_date
     return None
 
+def create_order_object(phases, articolo, quantity, order_id, end_date, settings):
+    # Using the settings to calculate open times, close times, holidays, etc.
+    phase_dates = calculate_phase_dates(end_date, phases, quantity, settings)
+    
+    order_object = {
+        "orderId": str(order_id),
+        "orderInsertDate": datetime.datetime.now(),
+        "orderStartDate": phase_dates[0],
+        "assignedOperator": [[""] for _ in phases],
+        "orderStatus": 0,  # Initial order status
+        "orderDescription": "",  # Fill based on your logic
+        "codiceArticolo": articolo,
+        "orderDeadline": end_date,
+        "customerDeadline": end_date,
+        "quantita": quantity,
+        "phase": [[p] for p in phases],
+        "phaseStatus": [[1] for _ in phases],  # Initial phase statuses
+        "phaseEndTime": [[et] for et in get_phase_end_times(phases)],
+        "phaseLateMotivation": [["none"] for _ in phases],
+        "phaseRealTime": [[0] for _ in phases],
+        "entrataCodaFase": [[date] for date in phase_dates],
+        "priority": 0,
+        "inCodaAt": []
+    }
+    
+    return order_object
 
 def create_json_for_flowchart(codice, phases, cycle_times, description):
         element_ids = [str(ObjectId()) for _ in phases]
@@ -238,90 +290,45 @@ def map_phases(phase_string):
     return mapped_phases
         
 def upload_orders_from_xlsx_amade(xlsx_path):
-    global client 
+    settings = fetch_settings()  # Fetch company settings (working hours, holidays, etc.)
+    global client
     db = client['orders_db']
-    famiglie_collection = client['process_db']['famiglie_di_prodotto'] 
-
-    # Load the Excel file
+    # Load the Excel data
     xls = pd.ExcelFile(xlsx_path)
-    
-    # Process the "Articoli" sheet
     articoli_df = pd.read_excel(xls, sheet_name='Articoli')
-
-    # Create a structure to store family and codice articolo information
-    family_dict = {}
-    articoli_codici = {}
-
-    # Retrieve families from the database
-    families_from_db = famiglie_collection.find()
-    
-    for family in families_from_db:
-        family_title = family['titolo']
-        catalogo = family.get('catalogo', [])
-        
-        # Store all family titles locally
-        family_dict[family_title] = True
-        
-        for item in catalogo:
-            codice_articolo = item['prodId']
-            articoli_codici[codice_articolo] = family_title
-
-    # Check if the "Codice Articolo" and "Famiglia di Prodotto" are present in the database
-    articoli_checks = []
-    for idx, row in articoli_df.iterrows():
-        codice_articolo = row['Codice Articolo']
-        famiglia = row['Famiglia di prodotto']
-        
-        # Check if the family exists in the local structure
-        famiglia_exists = family_dict.get(famiglia, False)
-        
-        # Check if the codice_articolo exists and what family it belongs to
-        codice_exists = articoli_codici.get(codice_articolo, None)
-
-        articoli_checks.append({
-            'Codice': codice_articolo,
-            'Famiglia': famiglia,
-            'FamigliaExists': famiglia_exists,
-            'CodiceExists': codice_exists is not None,
-            'BelongsTo': codice_exists
-        })
-
-    # Process the "Ordini" sheet
     ordini_df = pd.read_excel(xls, sheet_name='Ordini')
-
-    # Store order upload results
+    
     successful_orders = []
     failed_orders = []
 
-    # Loop through each row in the "Ordini" sheet
     for idx, row in ordini_df.iterrows():
         ordine_id = row['Id Ordine']
-        codice_articolo = row['Codice Articolo'] 
-        qta = row['QTA']
-        data_richiesta = row['Data Richiesta']
+        codice_articolo = row['Codice Articolo']
+        quantity = row['QTA']
+        data_richiesta = row['Data Richiesta']  # Deadline for the order
         
-        # Check if the Codice Articolo is present in the structure
-        codice_info = next((item for item in articoli_checks if item['Codice'] == codice_articolo), None)
-        
-        if codice_info and codice_info['CodiceExists']:
-            # Create the order and upload it to MongoDB (in the correct database and collection)
-            order_object = {
-                'ordineId': ordine_id,
-                'codiceArticolo': codice_articolo,
-                'quantita': qta,
-                'dataRichiesta': data_richiesta,
-            }
-            db['ordini'].insert_one(order_object)  # Insert into 'orders_db.ordini' collection
-            successful_orders.append(ordine_id)
-        else:
-            failed_orders.append({
-                'ordineId': ordine_id,
-                'codiceArticolo': codice_articolo
-            })
+        # Fetch the phases for the product
+        try:
+            phases = get_procedure_phases_by_prodId(codice_articolo)
+            if phases:
+                # Create the order object
+                order_object = create_order_object(phases, codice_articolo, quantity, ordine_id, data_richiesta, settings)
+                # Insert into MongoDB
+                db['ordini'].insert_one(order_object)
+                successful_orders.append(ordine_id)
+            else:
+                failed_orders.append({'ordineId': ordine_id, 'reason': 'No phases found'})
+        except Exception as e:
+            failed_orders.append({'ordineId': ordine_id, 'codiceArticolo': codice_articolo, 'reason': str(e)})
+
     
-    # Show a report to the user
+    # Display the upload report
+    
     show_upload_report(successful_orders, failed_orders)
 
+    
+    print("Successful orders:", successful_orders)
+    print("Failed orders:", failed_orders)
 
 def show_upload_report(successful_orders, failed_orders):
     report_message = "Upload Report:\n\n"
@@ -334,10 +341,12 @@ def show_upload_report(successful_orders, failed_orders):
     if failed_orders:
         report_message += "Failed to upload orders (Missing Codice Articolo):\n"
         for failed in failed_orders:
-            report_message += f"Order ID: {failed['ordineId']}, Codice Articolo: {failed['codiceArticolo']}\n"
+            codice_articolo = failed.get('codiceArticolo', 'Unknown')
+            report_message += f"Order ID: {failed['ordineId']}, Codice Articolo: {codice_articolo}, Reason: {failed['reason']}\n"
 
     # Show the message in a popup dialog
     QMessageBox.information(None, "Upload Report", report_message)
+
 
 def check_missing_families(articoli_checks):
     missing_families = [check['Famiglia'] for check in articoli_checks if not check['FamigliaExists']]
@@ -402,36 +411,44 @@ def create_order_object_with_dates(phases, codice_articolo, quantita, order_id, 
         "orderId": order_id,
         "dataInizioLavorazioni": entrata_coda_fase[0][0], #datetime.datetime.fromtimestamp(current_time.timestamp() / 1000),
         "priority": 0,
-        "inCodaAt": ""
+        "inCodaAt": []
     }
     
     return order_object
 
 def get_procedure_phases_by_prodId(prodId):
-    # Connect to the MongoDB database
     db = client['process_db']
-    collection = db['catalogo']
+    collection = db['famiglie_di_prodotto']
     
-    # Print debug info
-    print(f"Searching for prodId: {prodId}")
-    
-    # Find the document with the matching prodId
-    document = collection.find_one({"prodId": prodId})
+    # Search for the family containing the prodId in the catalogo array
+    document = collection.find_one({"catalogo.prodId": prodId})
     
     if not document:
-        # Print all documents for debugging
+        # Print all documents for debugging purposes
         all_documents = list(collection.find())
         print("All documents in collection:")
         for doc in all_documents:
             print(doc)
         raise ValueError(f"No document found with prodId {prodId}")
     
-    # Extract the 'elements' array from the 'dashboard' object
+    # Now find the specific item in the catalogo array
+    catalog_item = next((item for item in document['catalogo'] if item['prodId'] == prodId), None)
+    
+    if not catalog_item:
+        raise ValueError(f"No catalog item found with prodId {prodId}")
+    
+    # Extract the 'elements' array from the dashboard
     dashboard = document.get('dashboard', {})
     elements = dashboard.get('elements', [])
     
-    # Extract the 'text' field from each object in the 'elements' array
+    if not elements:
+        raise ValueError(f"No elements found in the dashboard for prodId {prodId}")
+    
+    # Extract the 'text' field from each element in the elements array (phases)
     phases = [element.get('text') for element in elements if 'text' in element]
+    
+    if not phases:
+        raise ValueError(f"No phases found for prodId {prodId}")
     
     return phases
 

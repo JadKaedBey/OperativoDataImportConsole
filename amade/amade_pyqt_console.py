@@ -386,7 +386,7 @@ def upload_orders_from_xlsx_amade(xlsx_path):
             phases = get_procedure_phases_by_prodId(codice_articolo)
             if phases:
                 # Create the order object
-                order_object = create_order_object(phases, codice_articolo, int(quantity), int(ordine_id), data_richiesta, order_description, settings)
+                order_object = create_order_object(phases, codice_articolo, int(quantity), ordine_id, data_richiesta, order_description, settings)
                 # Insert into MongoDB
                 db['ordini'].insert_one(order_object)
                 successful_orders.append(ordine_id)

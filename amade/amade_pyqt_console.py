@@ -69,19 +69,6 @@ def fetch_settings():
     
     return settings
 
-# def get_procedure_phases_by_prodId(prodId):
-#     # Fetch the phases for a product ID from the process_db
-    
-#     process_db = client['process_db'] # sktchy
-    
-#     product = process_db['catalogo'].find_one({"prodId": prodId})
-#     print(product)
-#     if not product:
-#         raise ValueError(f"No document found with prodId {prodId}")
-    
-#     phases = [element.get('text') for element in product.get('dashboard', {}).get('elements', []) if 'text' in element]
-#     return phases
-
 def get_phase_end_times(phases):
     # Fetch the phase end times from the database
     end_times = []
@@ -92,61 +79,104 @@ def get_phase_end_times(phases):
     return end_times
 
 def calculate_phase_dates(end_date, phases, quantity, settings):
-    # Calculate the start dates for phases based on the logic from Flutter
-    entrata_coda_fase = []
+    open_time = settings.get('orariAzienda', {}).get('inizio', {'ore': 8, 'minuti': 0})
+    close_time = settings.get('orariAzienda', {}).get('fine', {'ore': 18, 'minuti': 0})
+    holiday_list = settings.get('ferieAziendali', [])
+    pausa_pranzo = settings.get('pausaPranzo', {'inizio': {'ore': 12, 'minuti': 0}, 'fine': {'ore': 15, 'minuti': 0}})
+
     phase_durations = get_phase_end_times(phases)
+    entrata_coda_fase = []
     
     for i, phase in enumerate(phases):
-        # Placeholder logic for start date calculation
+        # Calculate phase duration based on quantity
         duration = phase_durations[i] * quantity
-        start_date = end_date - datetime.timedelta(minutes=duration)
+        
+        # Calculate start date for the phase, taking into account work hours, breaks, and holidays
+        start_date = find_start_date_of_phase(
+            end_date, 
+            duration, 
+            open_time, 
+            close_time, 
+            pausa_pranzo, 
+            holiday_list
+        )
+        
         entrata_coda_fase.append(start_date)
+        # Update end_date to the start date of the current phase for the next iteration
+        end_date = start_date
     
     return entrata_coda_fase
 
-def find_start_date_of_phase(end_date, target_phase, quantity, open_time, holiday_list, pausa_pranzo, graph, durations):
-    def traverse_backwards(current_id):
-        if target_phase in current_id:
-            return durations[current_id] * quantity
-        if current_id not in reverse_graph:
-            return None
-        for prev_id in reverse_graph[current_id]:
-            result = traverse_backwards(prev_id)
-            if result is not None:
-                return result + (durations[current_id] * quantity)
-        return None
+def find_start_date_of_phase(end_date, duration, open_time, close_time, pausa_pranzo, holiday_list):
+    """
+    Recursively calculates the start date of a phase by moving backwards from the end date.
+    Accounts for working hours, lunch breaks, holidays, and weekends.
+    """
+    # Calculate the duration of a workday in minutes (excluding the lunch break)
+    workday_start = datetime.timedelta(hours=open_time['ore'], minutes=open_time['minuti'])
+    workday_end = datetime.timedelta(hours=close_time['ore'], minutes=close_time['minuti'])
+    lunch_start = datetime.timedelta(hours=pausa_pranzo['inizio']['ore'], minutes=pausa_pranzo['inizio']['minuti'])
+    lunch_end = datetime.timedelta(hours=pausa_pranzo['fine']['ore'], minutes=pausa_pranzo['fine']['minuti'])
+    
+    # Total working time in a day excluding the lunch break
+    workday_duration = (workday_end - workday_start).total_seconds() / 60
+    lunch_duration = (lunch_end - lunch_start).total_seconds() / 60
+    effective_workday_minutes = workday_duration - lunch_duration
+    
+    # Calculate how many full workdays are required
+    full_workdays_needed = duration // effective_workday_minutes
+    remaining_minutes = duration % effective_workday_minutes
 
-    reverse_graph = {k: [] for k in graph}
-    for k, v in graph.items():
-        for node in v:
-            reverse_graph[node].append(k)
+    # Move the end date back by the full workdays, skipping weekends and holidays
+    start_date = subtract_workdays(end_date, full_workdays_needed, open_time, close_time, holiday_list)
+    
+    # Now handle the remaining minutes
+    while remaining_minutes > 0:
+        # If the current day is a weekend or holiday, skip it
+        if start_date.weekday() >= 5 or is_holiday(start_date, holiday_list):
+            start_date -= datetime.timedelta(days=1)
+            continue
 
-    pausa = datetime.timedelta(hours=pausa_pranzo['fine']['ore'], minutes=pausa_pranzo['fine']['minuti']) - \
-            datetime.timedelta(hours=pausa_pranzo['inizio']['ore'], minutes=pausa_pranzo['inizio']['minuti'])
-    if isinstance(end_date, float):
-        return None
-    minutes_in_day = datetime.timedelta(hours=end_date.hour, minutes=end_date.minute) - \
-                     datetime.timedelta(hours=open_time['ore'], minutes=open_time['minuti']) - pausa
+        # Define workday start and end times for the current day
+        workday_start_dt = start_date.replace(hour=open_time['ore'], minute=open_time['minuti'])
+        workday_end_dt = start_date.replace(hour=close_time['ore'], minute=close_time['minuti'])
 
-    end_nodes = [key for key, val in graph.items() if not val]
-    for end_node in end_nodes:
-        total_minutes = traverse_backwards(end_node)
-        if total_minutes is not None:
-            whole_days = total_minutes // (minutes_in_day.total_seconds() // 60)
-            extra_minutes = total_minutes % (minutes_in_day.total_seconds() // 60)
+        # Check if we can fit the remaining minutes in the current workday
+        if remaining_minutes <= (workday_end_dt - workday_start_dt).total_seconds() / 60:
+            start_date -= datetime.timedelta(minutes=remaining_minutes)
+            remaining_minutes = 0
+        else:
+            # Subtract a full workday and continue
+            remaining_minutes -= effective_workday_minutes
+            start_date -= datetime.timedelta(days=1)
+    
+    return start_date
 
-            possible_date = end_date - datetime.timedelta(days=whole_days, minutes=extra_minutes)
+def subtract_workdays(end_date, workdays, open_time, close_time, holiday_list):
+    """
+    Subtracts the given number of workdays from the end date, skipping weekends and holidays.
+    """
+    while workdays > 0:
+        end_date -= datetime.timedelta(days=1)
+        
+        # Skip weekends
+        if end_date.weekday() >= 5 or is_holiday(end_date, holiday_list):
+            continue
 
-            for day in (possible_date + datetime.timedelta(days=i) for i in range((end_date - possible_date).days + 1)):
-                if day.weekday() >= 5:  # Saturday or Sunday
-                    possible_date -= datetime.timedelta(days=1)
-                for hol in holiday_list:
-                    hol_start = datetime.datetime.fromtimestamp(hol['inizio']['$date']['$numberLong'] / 1000)
-                    hol_end = datetime.datetime.fromtimestamp(hol['fine']['$date']['$numberLong'] / 1000)
-                    if hol_start <= day <= hol_end:
-                        possible_date -= datetime.timedelta(days=1)
-            return possible_date
-    return None
+        workdays -= 1
+
+    return end_date
+
+def is_holiday(date, holiday_list):
+    """
+    Check if the date falls on a holiday by comparing against the holiday_list.
+    """
+    for holiday in holiday_list:
+        holiday_start = datetime.datetime.fromtimestamp(holiday['inizio']['$date']['$numberLong'] / 1000)
+        holiday_end = datetime.datetime.fromtimestamp(holiday['fine']['$date']['$numberLong'] / 1000)
+        if holiday_start <= date <= holiday_end:
+            return True
+    return False
 
 def create_order_object(phases, articolo, quantity, order_id, end_date, settings):
     # Using the settings to calculate open times, close times, holidays, etc.

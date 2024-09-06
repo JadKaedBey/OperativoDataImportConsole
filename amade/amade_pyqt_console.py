@@ -33,6 +33,8 @@ window_height = 1600
 
 load_dotenv()  # Load environment variables from .env file
 
+# MongoDB Functions:
+
 def connect_to_mongodb(username, password):
     global client
     print(f"Attempting to connect with username: {username} and password: {password}")
@@ -56,6 +58,8 @@ def connect_to_mongodb(username, password):
         print(f"Error connecting to MongoDB: {e}")
         return False
 
+# Getters from DB
+
 def fetch_settings():
     global client
     db = client['azienda']
@@ -77,6 +81,8 @@ def get_phase_end_times(phases):
         phase_info = process_db['macchinari'].find_one({"name": phase})
         end_times.append(phase_info.get('queueTargetTime', 0) if phase_info else 0)
     return end_times
+
+# Phase Calculation functions:
 
 def calculate_phase_dates(end_date, phases, quantity, settings):
     open_time = settings.get('orariAzienda', {}).get('inizio', {'ore': 8, 'minuti': 0})
@@ -178,7 +184,7 @@ def is_holiday(date, holiday_list):
             return True
     return False
 
-def create_order_object(phases, articolo, quantity, order_id, end_date, settings):
+def create_order_object(phases, articolo, quantity, order_id, end_date, order_description, settings):
     # Using the settings to calculate open times, close times, holidays, etc.
     phase_dates = calculate_phase_dates(end_date, phases, quantity, settings)
     
@@ -188,11 +194,11 @@ def create_order_object(phases, articolo, quantity, order_id, end_date, settings
         "orderStartDate": phase_dates[0],
         "assignedOperator": [[""] for _ in phases],
         "orderStatus": 0,  # Initial order status
-        "orderDescription": "",  # Fill based on your logic
+        "orderDescription": order_description,  # Placeholder
         "codiceArticolo": articolo,
         "orderDeadline": end_date,
         "customerDeadline": end_date,
-        "quantita": quantity,
+        "quantita": int(quantity),
         "phase": [[p] for p in phases],
         "phaseStatus": [[1] for _ in phases],  # Initial phase statuses
         "phaseEndTime": [[et] for et in get_phase_end_times(phases)],
@@ -319,6 +325,43 @@ def map_phases(phase_string):
     
     return mapped_phases
         
+def get_procedure_phases_by_prodId(prodId):
+    db = client['process_db']
+    collection = db['famiglie_di_prodotto']
+    
+    # Search for the family containing the prodId in the catalogo array
+    document = collection.find_one({"catalogo.prodId": prodId})
+    
+    if not document:
+        # Print all documents for debugging purposes
+        all_documents = list(collection.find())
+        print("All documents in collection:")
+        for doc in all_documents:
+            print(doc)
+        raise ValueError(f"No document found with prodId {prodId}")
+    
+    # Now find the specific item in the catalogo array
+    catalog_item = next((item for item in document['catalogo'] if item['prodId'] == prodId), None)
+    
+    if not catalog_item:
+        raise ValueError(f"No catalog item found with prodId {prodId}")
+    
+    # Extract the 'elements' array from the dashboard
+    dashboard = document.get('dashboard', {})
+    elements = dashboard.get('elements', [])
+    
+    if not elements:
+        raise ValueError(f"No elements found in the dashboard for prodId {prodId}")
+    
+    # Extract the 'text' field from each element in the elements array (phases)
+    phases = [element.get('text') for element in elements if 'text' in element]
+    
+    if not phases:
+        raise ValueError(f"No phases found for prodId {prodId}")
+    
+    return phases
+
+        
 def upload_orders_from_xlsx_amade(xlsx_path):
     settings = fetch_settings()  # Fetch company settings (working hours, holidays, etc.)
     global client
@@ -336,13 +379,14 @@ def upload_orders_from_xlsx_amade(xlsx_path):
         codice_articolo = row['Codice Articolo']
         quantity = row['QTA']
         data_richiesta = row['Data Richiesta']  # Deadline for the order
+        order_description = row["Descrizione"] or ""
         
         # Fetch the phases for the product
         try:
             phases = get_procedure_phases_by_prodId(codice_articolo)
             if phases:
                 # Create the order object
-                order_object = create_order_object(phases, codice_articolo, quantity, ordine_id, data_richiesta, settings)
+                order_object = create_order_object(phases, codice_articolo, int(quantity), int(ordine_id), data_richiesta, order_description, settings)
                 # Insert into MongoDB
                 db['ordini'].insert_one(order_object)
                 successful_orders.append(ordine_id)
@@ -356,7 +400,6 @@ def upload_orders_from_xlsx_amade(xlsx_path):
     
     show_upload_report(successful_orders, failed_orders)
 
-    
     print("Successful orders:", successful_orders)
     print("Failed orders:", failed_orders)
 
@@ -369,7 +412,7 @@ def show_upload_report(successful_orders, failed_orders):
         report_message += "\n\n"
 
     if failed_orders:
-        report_message += "Failed to upload orders (Missing Codice Articolo):\n"
+        report_message += "Failed to upload orders:\n"
         for failed in failed_orders:
             codice_articolo = failed.get('codiceArticolo', 'Unknown')
             report_message += f"Order ID: {failed['ordineId']}, Codice Articolo: {codice_articolo}, Reason: {failed['reason']}\n"
@@ -384,7 +427,13 @@ def check_missing_families(articoli_checks):
     if missing_families:
         QMessageBox.warning(None, "Missing Families", "The following families are missing in the database:\n" + "\n".join(missing_families))
 
+## DEPRECATED
+
 def create_order_object_with_dates(phases, codice_articolo, quantita, order_id, end_date, customer_deadline):
+    ""
+    DeprecationWarning
+    ""
+    
     settings = fetch_settings()
     
     open_time = settings.get('orariAzienda', {}).get('inizio', {'ore': 8, 'minuti': 0})
@@ -446,41 +495,6 @@ def create_order_object_with_dates(phases, codice_articolo, quantita, order_id, 
     
     return order_object
 
-def get_procedure_phases_by_prodId(prodId):
-    db = client['process_db']
-    collection = db['famiglie_di_prodotto']
-    
-    # Search for the family containing the prodId in the catalogo array
-    document = collection.find_one({"catalogo.prodId": prodId})
-    
-    if not document:
-        # Print all documents for debugging purposes
-        all_documents = list(collection.find())
-        print("All documents in collection:")
-        for doc in all_documents:
-            print(doc)
-        raise ValueError(f"No document found with prodId {prodId}")
-    
-    # Now find the specific item in the catalogo array
-    catalog_item = next((item for item in document['catalogo'] if item['prodId'] == prodId), None)
-    
-    if not catalog_item:
-        raise ValueError(f"No catalog item found with prodId {prodId}")
-    
-    # Extract the 'elements' array from the dashboard
-    dashboard = document.get('dashboard', {})
-    elements = dashboard.get('elements', [])
-    
-    if not elements:
-        raise ValueError(f"No elements found in the dashboard for prodId {prodId}")
-    
-    # Extract the 'text' field from each element in the elements array (phases)
-    phases = [element.get('text') for element in elements if 'text' in element]
-    
-    if not phases:
-        raise ValueError(f"No phases found for prodId {prodId}")
-    
-    return phases
 
 class LoginWindow(QDialog):
     def __init__(self, parent=None):
@@ -668,10 +682,10 @@ class MainWindow(QMainWindow):
             for document in collection.find():
                 name = document.get('nome', 'UnknownName')
                 surname = document.get('cognome', 'UnknownSurname')
-                password = document.get('password', 'NoPassword')  # Assuming 'password' is the field name in your database
-                qr_data = f"{name}||{surname}||{password}"  # Format the data as required by the new QR code system
+                password = document.get('password', 'NoPassword')  
+                qr_data = f"{name}||{surname}||{password}"  
                 filename = f"{name}_{surname}.png"
-                self.generate_qr(qr_data, filename, name, surname)  # Pass the name and surname to the QR generation function
+                self.generate_qr(qr_data, filename, name, surname)  
             QMessageBox.information(self, "QR Codes Generated", "QR codes have been successfully generated and saved in " + self.qr_save_path)
         except Exception as e:
             QMessageBox.critical(self, "Operation Failed", f"Failed to generate QR codes: {e}")
@@ -691,7 +705,7 @@ class MainWindow(QMainWindow):
         img = img.convert("RGB")
 
         # Define font and get a drawing context
-        font = ImageFont.load_default()  # You can specify a different font here
+        font = ImageFont.load_default() 
         draw = ImageDraw.Draw(img)
 
         # Text to add
@@ -792,6 +806,9 @@ class MainWindow(QMainWindow):
 
 
     def upload_queued_data(self):
+        """"""
+        DeprecationWarning
+        """"""
         global queued_df
         print("Attempting to upload data...")
         if not queued_df.empty:

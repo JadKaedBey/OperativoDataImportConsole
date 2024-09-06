@@ -378,9 +378,18 @@ def upload_orders_from_xlsx_amade(xlsx_path):
         ordine_id = row['Id Ordine']
         codice_articolo = row['Codice Articolo']
         quantity = row['QTA']
-        data_richiesta = row['Data Richiesta']  # Deadline for the order
         order_description = row["Descrizione"] or ""
         
+        # data_richiesta = row.get(['Data Richiesta'])  # Deadline for the order
+        data_richiesta = pd.to_datetime(row['Data Richiesta'], errors='coerce')  # Convert to datetime
+        if pd.isna(data_richiesta):
+            failed_orders.append({'ordineId': ordine_id, 'reason': 'Invalid date'})
+            continue
+        
+        #  # Check for missing data
+        # if pd.isna(ordine_id) or pd.isna(codice_articolo) or pd.isna(data_richiesta):
+        #     failed_orders.append({'ordineId': ordine_id or 'nan', 'codiceArticolo': codice_articolo or 'nan', 'reason': 'Missing data'})
+        #     continue
         # Fetch the phases for the product
         try:
             phases = get_procedure_phases_by_prodId(codice_articolo)

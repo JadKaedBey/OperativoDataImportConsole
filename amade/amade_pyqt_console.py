@@ -361,6 +361,7 @@ def get_procedure_phases_by_prodId(prodId):
     
     return phases
 
+
         
 def upload_orders_from_xlsx_amade(xlsx_path):
     settings = fetch_settings()  # Fetch company settings (working hours, holidays, etc.)
@@ -380,7 +381,7 @@ def upload_orders_from_xlsx_amade(xlsx_path):
         quantity = row['QTA']
         order_description = row["Descrizione"] or ""
         
-        # data_richiesta = row.get(['Data Richiesta'])  # Deadline for the order
+        # data_richiesta = row.get(['Data Richiesta'])  # Deadline for the order OLD
         data_richiesta = pd.to_datetime(row['Data Richiesta'], errors='coerce')  # Convert to datetime
         if pd.isna(data_richiesta):
             failed_orders.append({'ordineId': ordine_id, 'reason': 'Invalid date'})
@@ -600,11 +601,12 @@ class MainWindow(QMainWindow):
         self.export_button = QPushButton("Export Data")
         self.utenti_qr_code_button = QPushButton("Generate Operatori QR Codes")
         self.order_qr_button = QPushButton("Generate Order QR Codes")
+        self.upload_articoli_button = QPushButton("Upload Articoli")  
 
         # Setup font
         font = QFont("Proxima Nova", 12)
         for button in [self.upload_famiglie_button, self.export_button, self.upload_orders_button_amade, self.upload_famiglie_button, 
-                       self.export_button, self.utenti_qr_code_button]:
+                       self.export_button, self.utenti_qr_code_button, self.upload_articoli_button]:
             button.setFont(font)
             button.setFixedSize(350, 50)
 
@@ -623,6 +625,8 @@ class MainWindow(QMainWindow):
         center_layout.addWidget(self.upload_orders_button_amade)
         center_layout.addWidget(self.utenti_qr_code_button)
         center_layout.addWidget(self.order_qr_button)
+        center_layout.addWidget(self.upload_articoli_button)  
+
 
         # Add stretches to center the center layout
         main_horizontal_layout.addLayout(left_layout)
@@ -640,6 +644,7 @@ class MainWindow(QMainWindow):
         self.utenti_qr_code_button.clicked.connect(self.generate_and_save_qr_codes)
         self.order_qr_button.clicked.connect(self.generate_order_qr_codes)
         self.upload_orders_button_amade.clicked.connect(self.upload_orders_amade)
+        self.upload_articoli_button.clicked.connect(self.upload_articoli)
         
         # Table for CSV data - REDUNDANT TO BE REMOVED
         self.table = QTableWidget()
@@ -997,6 +1002,110 @@ class MainWindow(QMainWindow):
         except Exception as e:
             print(f"Error exporting data: {e}")
             QMessageBox.critical(self, "Export Failed", f"Failed to export data: {e}")
+            
+    def upload_articoli(self):
+        # Open file dialog to select Excel file
+        file_path, _ = QFileDialog.getOpenFileName(self, "Open Excel File", "", "Excel files (*.xlsx)")
+        if not file_path:
+            QMessageBox.warning(self, "File Selection", "No file selected.")
+            return
+
+        if not file_path.endswith('.xlsx'):
+            QMessageBox.critical(self, "File Error", "The selected file is not an Excel file.")
+            return
+
+        try:
+            # Read the Excel file
+            xls = pd.ExcelFile(file_path)
+            articoli_df = pd.read_excel(xls, sheet_name='Articoli')
+        except Exception as e:
+            QMessageBox.critical(self, "File Error", f"Failed to read the Excel file: {e}")
+            return
+
+        # Check if required columns are present
+        required_columns = {'Codice Articolo', 'Descrizione articolo', 'Famiglia di prodotto', 'Fase Operativo', 'Tempo Ciclo', 'Info lavorazione'}
+        if not required_columns.issubset(articoli_df.columns):
+            missing_columns = required_columns - set(articoli_df.columns)
+            QMessageBox.critical(self, "File Error", "Missing required columns: " + ", ".join(missing_columns))
+            return
+
+        # Fetch all families from MongoDB
+        db = client['process_db']
+        collection = db['famiglie_di_prodotto']
+        families = list(collection.find())
+        # Create a dictionary for quick lookup
+        family_dict = {}
+        for family in families:
+            family_dict[family['titolo']] = family
+
+        # Initialize counters
+        success_count = 0
+        error_count = 0
+        errors = []
+
+        # Process each row in articoli_df
+        for idx, row in articoli_df.iterrows():
+            codice_articolo = row['Codice Articolo']
+            descrizione_articolo = row['Descrizione articolo']
+            famiglia_di_prodotto = row['Famiglia di prodotto']
+            fase_operativo = row['Fase Operativo']
+            tempo_ciclo = row['Tempo Ciclo']
+            info_lavorazione = row['Info lavorazione']
+
+            # Find the family in the database
+            if famiglia_di_prodotto not in family_dict:
+                errors.append({'Codice Articolo': codice_articolo, 'Reason': f'Famiglia di prodotto "{famiglia_di_prodotto}" not found in database.'})
+                error_count += 1
+                continue
+
+            family = family_dict[famiglia_di_prodotto]
+
+            # Check if 'codice_articolo' is already in 'catalogo'
+            catalogo = family.get('catalogo', [])
+            if any(item['prodId'] == codice_articolo for item in catalogo):
+                # Article already exists in catalogo
+                continue
+
+            # Create 'elements' array
+            dashboard_elements = family.get('dashboard', {}).get('elements', [])
+            elements = [{} for _ in dashboard_elements]
+
+            # Create the new catalog item
+            catalog_item = {
+                "_id": ObjectId(),
+                "prodId": codice_articolo,
+                "prodotto": descrizione_articolo or '',
+                "descrizione": "", 
+                "famiglia": famiglia_di_prodotto,
+                "elements": elements
+            }
+
+            # Add the new catalog item to 'catalogo' array
+            catalogo.append(catalog_item)
+
+            # Update the family in the dictionary
+            family['catalogo'] = catalogo
+            family_dict[famiglia_di_prodotto] = family
+
+            success_count += 1
+
+        # After processing all articles, update the database with the modified families
+        for famiglia, family in family_dict.items():
+            # Update the family document in the database
+            try:
+                collection.update_one({'_id': family['_id']}, {'$set': {'catalogo': family['catalogo']}})
+            except Exception as e:
+                errors.append({'Famiglia di prodotto': famiglia, 'Reason': f'Error updating database: {e}'})
+                error_count += 1
+
+        # Show summary message
+        summary_message = f"{success_count} articoli processed successfully, {error_count} errors."
+        if errors:
+            error_messages = "\n".join([f"{error.get('Codice Articolo', error.get('Famiglia di prodotto'))}: {error['Reason']}" for error in errors])
+            QMessageBox.information(self, "Processing Summary", summary_message + "\nErrors:\n" + error_messages)
+        else:
+            QMessageBox.information(self, "Processing Summary", summary_message)
+
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)

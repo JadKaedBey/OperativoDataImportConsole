@@ -179,22 +179,21 @@ def is_holiday(date, holiday_list):
     """
     Check if the date falls on a holiday by comparing against the holiday_list.
     """
-    print('in holiday')
+    # print('in holiday')
     for holiday in holiday_list:
-        print(f"Holiday data: {holiday}")  # Debug statement
+        # print(f"Holiday data: {holiday}")  # Debug statement
+        # OLD CODE CAUSING ERRORS: 
         # holiday_start = datetime.datetime.fromtimestamp(holiday['inizio']['$date']['$numberLong'] / 1000)
         # holiday_end = datetime.datetime.fromtimestamp(holiday['fine']['$date']['$numberLong'] / 1000)
         holiday_start = holiday['inizio']  # Assuming this is a datetime.datetime object
         holiday_end = holiday['fine'] 
         if holiday_start <= date <= holiday_end:
-            print(True)
             return True
-    print(False)
     return False
 
 def create_order_object(phases, articolo, quantity, order_id, end_date, order_description, settings):
     # Using the settings to calculate open times, close times, holidays, etc.
-    print('žžžžžžžžžžžžžžžžžžžžžžžžžžžžžžžžžž')
+    # print('Creating Order Object')
     phase_dates = calculate_phase_dates(end_date, phases, quantity, settings)
     print(phase_dates)
 
@@ -371,7 +370,15 @@ def get_procedure_phases_by_prodId(prodId):
     
     return phases
         
+def excel_date_parser(date_str):
+    return pd.to_datetime(date_str, dayfirst=True, errors='coerce')
+        
 def upload_orders_from_xlsx_amade(self):
+    # Fetch necessary data from MongoDB
+    db = client
+    collection_famiglie = db['process_db']['famiglie_di_prodotto']
+    collection_orders = db['orders_db']['ordini']
+    
     # Open file dialog to select Excel file
     file_path, _ = QFileDialog.getOpenFileName(self, "Open Excel File", "", "Excel files (*.xlsx)")
     if not file_path:
@@ -381,6 +388,15 @@ def upload_orders_from_xlsx_amade(self):
     if not file_path.endswith('.xlsx'):
         QMessageBox.critical(self, "File Error", "The selected file is not an Excel file.")
         return
+    
+    # Fetch existing order IDs from the 'ordini' collection
+    existing_order_ids = set()
+    
+    skipped_orders = []
+
+    order_cursor = collection_orders.find({}, {'orderId': 1})
+    for order in order_cursor:
+        existing_order_ids.add(order['orderId'])
 
     try:
         # Read the Excel file
@@ -390,6 +406,8 @@ def upload_orders_from_xlsx_amade(self):
             sheet_name='Ordini',
             dtype={'Id Ordine': str, 'Codice Articolo': str, 'Info aggiuntive': str},
             parse_dates=['Data Richiesta'],
+            date_parser=excel_date_parser
+
         )
     except Exception as e:
         QMessageBox.critical(self, "File Error", f"Failed to read the Excel file: {e}")
@@ -409,10 +427,7 @@ def upload_orders_from_xlsx_amade(self):
     successful_orders = []
     failed_orders = []
 
-    # Fetch necessary data from MongoDB
-    db = client
-    collection_famiglie = db['process_db']['famiglie_di_prodotto']
-    collection_orders = db['orders_db']['ordini']
+    
 
     # Create a dictionary to map 'prodId' to catalog item and family information
     famiglia_cursor = collection_famiglie.find({}, {'catalogo': 1, 'dashboard': 1})
@@ -438,6 +453,10 @@ def upload_orders_from_xlsx_amade(self):
         dataRichiesta = row['Data Richiesta']
         infoAggiuntive = row['Info aggiuntive']
 
+        if ordineId in existing_order_ids:
+            skipped_orders.append(ordineId)
+            continue  # Skip processing this order
+    
         # Validate dataRichiesta
         if pd.isnull(dataRichiesta):
             failed_orders.append({'ordineId': ordineId, 'codiceArticolo': codiceArticolo, 'reason': 'Data Richiesta is null'})
@@ -459,7 +478,7 @@ def upload_orders_from_xlsx_amade(self):
 
         catalog_item = catalog_info['catalog_item']
         phases = catalog_info['phases']
-        articolo = catalog_item  # The article information
+        articolo = catalog_item  
         quantity = qta
         order_id = ordineId
         end_date = dataRichiesta
@@ -487,10 +506,26 @@ def upload_orders_from_xlsx_amade(self):
         except Exception as e:
             failed_orders.append({'ordineId': ordineId, 'codiceArticolo': codiceArticolo, 'reason': str(e)})
 
-    # Show a report of the upload process
-    show_upload_report(successful_orders, failed_orders)
+    summary_message = f"{len(successful_orders)} orders processed successfully, {len(failed_orders)} errors, {len(skipped_orders)} orders skipped (already in database)."
 
-def show_upload_report(successful_orders, failed_orders):
+     # Create the report content
+    report_message = "Orders Upload Report:\n\n"
+    report_message += summary_message + "\n\n"
+
+    if successful_orders:
+        report_message += "Successfully processed orders:\n"
+        report_message += "\n".join(successful_orders) + "\n\n"
+
+    if failed_orders:
+        report_message += "Errors encountered:\n"
+        for error in failed_orders:
+            error_detail = f"{error.get('ordineId', error.get('codiceArticolo'))}: {error['reason']}"
+            report_message += error_detail + "\n"
+
+    # Show a report of the upload process
+    show_upload_report(successful_orders, failed_orders, skipped_orders)
+
+def show_upload_report(successful_orders, failed_orders, skipped_orders):
     report_message = "Upload Report:\n\n"
 
     if successful_orders:
@@ -503,6 +538,10 @@ def show_upload_report(successful_orders, failed_orders):
         for failed in failed_orders:
             codice_articolo = failed.get('codiceArticolo', 'Unknown')
             report_message += f"Order ID: {failed['ordineId']}, Codice Articolo: {codice_articolo}, Reason: {failed['reason']}\n"
+            
+    if skipped_orders:
+        report_message += "Skipped orders (already in database):\n"
+        report_message += "\n".join(skipped_orders) + "\n\n"
 
     # Show the message in a popup dialog
     QMessageBox.information(None, "Upload Report", report_message)
@@ -559,7 +598,6 @@ def create_order_object_with_dates(phases, codice_articolo, quantita, order_id, 
         if isinstance(end_date, str):
             end_date = datetime.datetime(int(end_date.split("/")[2]), int(end_date.split("/")[1]), int(end_date.split("/")[0]), close_time['ore'], close_time['minuti'])
 
-        print(end_date)
         start_date = find_start_date_of_phase(end_date, phase, quantita, open_time, holiday_list, pausa_pranzo, graph, durations)
         entrata_coda_fase.append([start_date])#(int(start_date.timestamp() * 1000)) if start_date else None)
 

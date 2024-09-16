@@ -4,4 +4,5 @@ venv/
 build/
 dist/
 QRs/
+reports/
 Order Qrs/

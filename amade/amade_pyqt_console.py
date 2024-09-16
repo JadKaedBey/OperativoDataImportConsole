@@ -80,6 +80,7 @@ def get_phase_end_times(phases):
     for phase in phases:
         phase_info = process_db['macchinari'].find_one({"name": phase})
         end_times.append(phase_info.get('queueTargetTime', 0) if phase_info else 0)
+        
     return end_times
 
 # Phase Calculation functions:
@@ -111,6 +112,7 @@ def calculate_phase_dates(end_date, phases, quantity, settings):
         # Update end_date to the start date of the current phase for the next iteration
         end_date = start_date
     
+    print(entrata_coda_fase)
     return entrata_coda_fase
 
 def find_start_date_of_phase(end_date, duration, open_time, close_time, pausa_pranzo, holiday_list):
@@ -177,24 +179,32 @@ def is_holiday(date, holiday_list):
     """
     Check if the date falls on a holiday by comparing against the holiday_list.
     """
+    print('in holiday')
     for holiday in holiday_list:
-        holiday_start = datetime.datetime.fromtimestamp(holiday['inizio']['$date']['$numberLong'] / 1000)
-        holiday_end = datetime.datetime.fromtimestamp(holiday['fine']['$date']['$numberLong'] / 1000)
+        print(f"Holiday data: {holiday}")  # Debug statement
+        # holiday_start = datetime.datetime.fromtimestamp(holiday['inizio']['$date']['$numberLong'] / 1000)
+        # holiday_end = datetime.datetime.fromtimestamp(holiday['fine']['$date']['$numberLong'] / 1000)
+        holiday_start = holiday['inizio']  # Assuming this is a datetime.datetime object
+        holiday_end = holiday['fine'] 
         if holiday_start <= date <= holiday_end:
+            print(True)
             return True
+    print(False)
     return False
 
 def create_order_object(phases, articolo, quantity, order_id, end_date, order_description, settings):
     # Using the settings to calculate open times, close times, holidays, etc.
+    print('žžžžžžžžžžžžžžžžžžžžžžžžžžžžžžžžžž')
     phase_dates = calculate_phase_dates(end_date, phases, quantity, settings)
-    
+    print(phase_dates)
+
     order_object = {
         "orderId": str(order_id),
         "orderInsertDate": datetime.datetime.now(),
         "orderStartDate": phase_dates[0],
         "assignedOperator": [[""] for _ in phases],
         "orderStatus": 0,  # Initial order status
-        "orderDescription": order_description,  # Placeholder
+        "orderDescription": order_description or '', 
         "codiceArticolo": articolo,
         "orderDeadline": end_date,
         "customerDeadline": end_date,
@@ -360,58 +370,125 @@ def get_procedure_phases_by_prodId(prodId):
         raise ValueError(f"No phases found for prodId {prodId}")
     
     return phases
-
-
         
-def upload_orders_from_xlsx_amade(xlsx_path):
-    settings = fetch_settings()  # Fetch company settings (working hours, holidays, etc.)
-    global client
-    db = client['orders_db']
-    # Load the Excel data
-    xls = pd.ExcelFile(xlsx_path)
-    articoli_df = pd.read_excel(xls, sheet_name='Articoli')
-    ordini_df = pd.read_excel(xls, sheet_name='Ordini')
-    
+def upload_orders_from_xlsx_amade(self):
+    # Open file dialog to select Excel file
+    file_path, _ = QFileDialog.getOpenFileName(self, "Open Excel File", "", "Excel files (*.xlsx)")
+    if not file_path:
+        QMessageBox.warning(self, "File Selection", "No file selected.")
+        return
+
+    if not file_path.endswith('.xlsx'):
+        QMessageBox.critical(self, "File Error", "The selected file is not an Excel file.")
+        return
+
+    try:
+        # Read the Excel file
+        xls = pd.ExcelFile(file_path)
+        orders_df = pd.read_excel(
+            xls,
+            sheet_name='Ordini',
+            dtype={'Id Ordine': str, 'Codice Articolo': str, 'Info aggiuntive': str},
+            parse_dates=['Data Richiesta'],
+        )
+    except Exception as e:
+        QMessageBox.critical(self, "File Error", f"Failed to read the Excel file: {e}")
+        return
+
+    # Check if required columns are present
+    required_columns = {'Id Ordine', 'Codice Articolo', 'QTA', 'Data Richiesta', 'Info aggiuntive'}
+    if not required_columns.issubset(orders_df.columns):
+        missing_columns = required_columns - set(orders_df.columns)
+        QMessageBox.critical(self, "File Error", "Missing required columns: " + ", ".join(missing_columns))
+        return
+
+    # Drop rows where 'Codice Articolo' is NaN
+    orders_df = orders_df.dropna(subset=['Codice Articolo'])
+
+    # Initialize counters and lists for reporting
     successful_orders = []
     failed_orders = []
 
-    for idx, row in ordini_df.iterrows():
-        ordine_id = row['Id Ordine']
-        codice_articolo = row['Codice Articolo']
-        quantity = row['QTA']
-        order_description = row["Descrizione"] or ""
-        
-        # data_richiesta = row.get(['Data Richiesta'])  # Deadline for the order OLD
-        data_richiesta = pd.to_datetime(row['Data Richiesta'], errors='coerce')  # Convert to datetime
-        if pd.isna(data_richiesta):
-            failed_orders.append({'ordineId': ordine_id, 'reason': 'Invalid date'})
+    # Fetch necessary data from MongoDB
+    db = client
+    collection_famiglie = db['process_db']['famiglie_di_prodotto']
+    collection_orders = db['orders_db']['ordini']
+
+    # Create a dictionary to map 'prodId' to catalog item and family information
+    famiglia_cursor = collection_famiglie.find({}, {'catalogo': 1, 'dashboard': 1})
+    prodId_to_catalog_info = {}
+    for famiglia in famiglia_cursor:
+        catalogo = famiglia.get('catalogo', [])
+        phases_elements = famiglia.get('dashboard', {}).get('elements', [])
+        phase_names = [element.get('text', '') for element in phases_elements]
+        for item in catalogo:
+            prodId_to_catalog_info[item['prodId']] = {
+                'catalog_item': item,
+                'phases': phase_names,
+                'family': famiglia
+            }
+            
+    settings = fetch_settings() 
+
+    # Process each order
+    for idx, row in orders_df.iterrows():
+        ordineId = row['Id Ordine']
+        codiceArticolo = row['Codice Articolo']
+        qta = row['QTA']
+        dataRichiesta = row['Data Richiesta']
+        infoAggiuntive = row['Info aggiuntive']
+
+        # Validate dataRichiesta
+        if pd.isnull(dataRichiesta):
+            failed_orders.append({'ordineId': ordineId, 'codiceArticolo': codiceArticolo, 'reason': 'Data Richiesta is null'})
             continue
-        
-        #  # Check for missing data
-        # if pd.isna(ordine_id) or pd.isna(codice_articolo) or pd.isna(data_richiesta):
-        #     failed_orders.append({'ordineId': ordine_id or 'nan', 'codiceArticolo': codice_articolo or 'nan', 'reason': 'Missing data'})
-        #     continue
-        # Fetch the phases for the product
+
+        if not isinstance(dataRichiesta, datetime.datetime):
+            try:
+                # Try to parse the date
+                dataRichiesta = pd.to_datetime(dataRichiesta, dayfirst=True)
+            except Exception as e:
+                failed_orders.append({'ordineId': ordineId, 'codiceArticolo': codiceArticolo, 'reason': f'Invalid date: {dataRichiesta}'})
+                continue
+
+        # Check if the 'codiceArticolo' exists in 'catalogo'
+        catalog_info = prodId_to_catalog_info.get(codiceArticolo)
+        if not catalog_info:
+            failed_orders.append({'ordineId': ordineId, 'codiceArticolo': codiceArticolo, 'reason': f'No document found with prodId {codiceArticolo}'})
+            continue
+
+        catalog_item = catalog_info['catalog_item']
+        phases = catalog_info['phases']
+        articolo = catalog_item  # The article information
+        quantity = qta
+        order_id = ordineId
+        end_date = dataRichiesta
+        order_description = infoAggiuntive
+
+        # Create the order object using the provided function
         try:
-            phases = get_procedure_phases_by_prodId(codice_articolo)
-            if phases:
-                # Create the order object
-                order_object = create_order_object(phases, codice_articolo, int(quantity), ordine_id, data_richiesta, order_description, settings)
-                # Insert into MongoDB
-                db['ordini'].insert_one(order_object)
-                successful_orders.append(ordine_id)
-            else:
-                failed_orders.append({'ordineId': ordine_id, 'reason': 'No phases found'})
+            order_document = create_order_object(
+                phases=phases,
+                articolo=codiceArticolo,
+                quantity=quantity,
+                order_id=order_id,
+                end_date=end_date,
+                order_description=order_description,
+                settings=settings
+            )
         except Exception as e:
-            failed_orders.append({'ordineId': ordine_id, 'codiceArticolo': codice_articolo, 'reason': str(e)})
+            failed_orders.append({'ordineId': ordineId, 'codiceArticolo': codiceArticolo, 'reason': f'Error creating order object: {e}'})
+            continue
 
-    
-    # Display the upload report
-    
+        # Insert the order into the 'orders' collection
+        try:
+            collection_orders.insert_one(order_document)
+            successful_orders.append(ordineId)
+        except Exception as e:
+            failed_orders.append({'ordineId': ordineId, 'codiceArticolo': codiceArticolo, 'reason': str(e)})
+
+    # Show a report of the upload process
     show_upload_report(successful_orders, failed_orders)
-
-    print("Successful orders:", successful_orders)
-    print("Failed orders:", failed_orders)
 
 def show_upload_report(successful_orders, failed_orders):
     report_message = "Upload Report:\n\n"
@@ -429,7 +506,25 @@ def show_upload_report(successful_orders, failed_orders):
 
     # Show the message in a popup dialog
     QMessageBox.information(None, "Upload Report", report_message)
+    
+    save_report_to_file(report_message, "orders")
 
+def save_report_to_file(report_content, report_type):
+    if not os.path.exists('./reports'):
+        os.makedirs('./reports')
+
+    # Generate a timestamped filename
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"{report_type}_report_{timestamp}.txt"
+    file_path = os.path.join('reports', filename)
+
+    # Write the report content to the file
+    try:
+        with open(file_path, 'w', encoding='utf-8') as file:
+            file.write(report_content)
+        print(f"Report saved to {file_path}")
+    except Exception as e:
+        print(f"Failed to save report: {e}")
 
 def check_missing_families(articoli_checks):
     missing_families = [check['Famiglia'] for check in articoli_checks if not check['FamigliaExists']]
@@ -504,7 +599,6 @@ def create_order_object_with_dates(phases, codice_articolo, quantita, order_id, 
     }
     
     return order_object
-
 
 class LoginWindow(QDialog):
     def __init__(self, parent=None):
@@ -867,12 +961,12 @@ class MainWindow(QMainWindow):
     # today
 
     def upload_orders_amade(self):
-        filename, _ = QFileDialog.getOpenFileName(self, "Open XLSX File", "", "Excel files (*.xlsx)")
-        if filename:
-            upload_orders_from_xlsx_amade(filename)
-            QMessageBox.information(self, "Upload Complete", "Order upload process completed.")
-        else:
-            QMessageBox.warning(self, "No File Selected", "Please select an Excel file to upload.")
+        # filename, _ = QFileDialog.getOpenFileName(self, "Open XLSX File", "", "Excel files (*.xlsx)")
+        # if filename:
+             upload_orders_from_xlsx_amade(self)
+        #     QMessageBox.information(self, "Upload Complete", "Order upload process completed.")
+        # else:
+        #     QMessageBox.warning(self, "No File Selected", "Please select an Excel file to upload.")
     
     def marcolin_import_famiglie(self):
         # Prompt the user to select an Excel file
@@ -1004,7 +1098,6 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Export Failed", f"Failed to export data: {e}")
             
     def upload_articoli(self):
-        # Open file dialog to select Excel file
         file_path, _ = QFileDialog.getOpenFileName(self, "Open Excel File", "", "Excel files (*.xlsx)")
         if not file_path:
             QMessageBox.warning(self, "File Selection", "No file selected.")
@@ -1042,6 +1135,8 @@ class MainWindow(QMainWindow):
         success_count = 0
         error_count = 0
         errors = []
+        processed_articoli = []
+
 
         # Process each row in articoli_df
         for idx, row in articoli_df.iterrows():
@@ -1052,9 +1147,10 @@ class MainWindow(QMainWindow):
             tempo_ciclo = row['Tempo Ciclo']
             info_lavorazione = row['Info lavorazione']
 
-            # Find the family in the database
+             # Find the family in the database
             if famiglia_di_prodotto not in family_dict:
-                errors.append({'Codice Articolo': codice_articolo, 'Reason': f'Famiglia di prodotto "{famiglia_di_prodotto}" not found in database.'})
+                error_message = f'Famiglia di prodotto "{famiglia_di_prodotto}" not found in database.'
+                errors.append({'Codice Articolo': codice_articolo, 'Reason': error_message})
                 error_count += 1
                 continue
 
@@ -1067,6 +1163,7 @@ class MainWindow(QMainWindow):
                 continue
 
             # Create 'elements' array
+            # For simplicity, create empty dictionaries, or match with family's dashboard elements
             dashboard_elements = family.get('dashboard', {}).get('elements', [])
             elements = [{} for _ in dashboard_elements]
 
@@ -1074,19 +1171,20 @@ class MainWindow(QMainWindow):
             catalog_item = {
                 "_id": ObjectId(),
                 "prodId": codice_articolo,
-                "prodotto": descrizione_articolo or '',
-                "descrizione": "", 
+                "prodotto": descrizione_articolo,
+                "descrizione": "",  # You can include additional info if needed
                 "famiglia": famiglia_di_prodotto,
                 "elements": elements
             }
 
-            # Add the new catalog item to 'catalogo' array
+            # Add the new catalog item to 'catalogo'
             catalogo.append(catalog_item)
 
             # Update the family in the dictionary
             family['catalogo'] = catalogo
             family_dict[famiglia_di_prodotto] = family
 
+            processed_articoli.append(codice_articolo)
             success_count += 1
 
         # After processing all articles, update the database with the modified families
@@ -1098,13 +1196,30 @@ class MainWindow(QMainWindow):
                 errors.append({'Famiglia di prodotto': famiglia, 'Reason': f'Error updating database: {e}'})
                 error_count += 1
 
-        # Show summary message
+        # Prepare the summary message
         summary_message = f"{success_count} articoli processed successfully, {error_count} errors."
         if errors:
             error_messages = "\n".join([f"{error.get('Codice Articolo', error.get('Famiglia di prodotto'))}: {error['Reason']}" for error in errors])
             QMessageBox.information(self, "Processing Summary", summary_message + "\nErrors:\n" + error_messages)
         else:
             QMessageBox.information(self, "Processing Summary", summary_message)
+
+        # Create the report content
+        report_message = "Articoli Upload Report:\n\n"
+        report_message += summary_message + "\n\n"
+
+        if processed_articoli:
+            report_message += "Successfully processed articoli:\n"
+            report_message += "\n".join(processed_articoli) + "\n\n"
+
+        if errors:
+            report_message += "Errors encountered:\n"
+            for error in errors:
+                error_detail = f"{error.get('Codice Articolo', error.get('Famiglia di prodotto'))}: {error['Reason']}"
+                report_message += error_detail + "\n"
+
+        # Write the report to a .txt file
+        save_report_to_file(report_message, "articoli")
 
 
 if __name__ == '__main__':

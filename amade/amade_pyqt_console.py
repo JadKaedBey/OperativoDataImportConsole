@@ -13,6 +13,7 @@ import os
 import datetime
 from bson import ObjectId
 from dotenv import load_dotenv
+from datetime import timedelta
 
 
 queued_df = pd.DataFrame()
@@ -73,92 +74,377 @@ def fetch_settings():
     
     return settings
 
-def get_phase_end_times(phases):
-    # Fetch the phase end times from the database
-    end_times = []
-    process_db = client['process_db']
-    for phase in phases:
-        phase_info = process_db['macchinari'].find_one({"name": phase})
-        end_times.append(phase_info.get('queueTargetTime', 0) if phase_info else 0)
+# def get_phase_end_times(phases):
+#     # Fetch the phase end times from the database
+#     end_times = []
+#     process_db = client['process_db']
+#     for phase in phases:
+#         phase_info = process_db['macchinari'].find_one({"name": phase})
+#         print('Got Phase end time:' + phase_info)
+#         end_times.append(phase_info.get('queueTargetTime', 0) if phase_info else 0)
         
+#     return end_times
+
+def get_phase_end_times(phases, codiceArticolo):
+    # Initialize the list to store phase end times
+    end_times = []
+    
+    # Access the database and collection
+    process_db = client['process_db']
+    famiglie_di_prodotto = process_db['famiglie_di_prodotto']
+    
+    # Find the correct family document based on codiceArticolo
+    family = famiglie_di_prodotto.find_one({"catalogo.prodId": codiceArticolo})
+    
+    # If the family document is found
+    if family:
+        for phase in phases:
+            # Loop through each element in the family 'dashboard' to find the phase by name
+            for element in family.get('dashboard', {}).get('elements', []):
+                if element.get('text') == phase:
+                    # Get the phase duration
+                    phase_duration = element.get('phaseDuration', 0)
+                    
+                    # Check if phase_duration is a dictionary and has '$numberInt', else use it as-is
+                    if isinstance(phase_duration, dict):
+                        phase_duration = phase_duration.get('$numberInt', 0)
+                    
+                    end_times.append(int(phase_duration))
+                    break
+            else:
+                # If the phase is not found, append 0 as the duration
+                end_times.append(0)
+    else:
+        # If the family or article isn't found, return 0 for each phase
+        end_times = [0] * len(phases)
+    
     return end_times
 
 # Phase Calculation functions:
 
-def calculate_phase_dates(end_date, phases, quantity, settings):
+def get_queue_times(phases, codiceArticolo):
+    process_db = client['process_db']
+    famiglie_di_prodotto = process_db['famiglie_di_prodotto']
+    
+    family = famiglie_di_prodotto.find_one({"catalogo.prodId": codiceArticolo})
+    queues = {}
+    
+    if family:
+        for phase in phases:
+            # Fetch queue time for each phase from the family dashboard
+            for element in family.get('dashboard', {}).get('elements', []):
+                if element.get('text') == phase:
+                    queues[phase] = int(element.get('phaseTargetQueue', 0))  
+                    break
+    return queues
+
+def get_phase_durations(phases, codiceArticolo):
+    process_db = client['process_db']
+    famiglie_di_prodotto = process_db['famiglie_di_prodotto']
+    
+    family = famiglie_di_prodotto.find_one({"catalogo.prodId": codiceArticolo})
+    durations = {}
+    
+    if family:
+        for phase in phases:
+            # Fetch duration time for each phase from the family dashboard
+            for element in family.get('dashboard', {}).get('elements', []):
+                if element.get('text') == phase:
+                    durations[phase] = int(element.get('phaseDuration', 0))  # Assuming 'phaseDuration' is the field for phase duration
+                    break
+    return durations
+
+def fetch_flowchart_data(codiceArticolo):
+    global client
+    db = client['process_db']
+    collection = db['famiglie_di_prodotto']
+
+    # Fetch the family document from the collection
+    family = collection.find_one({"catalogo.prodId": codiceArticolo})
+
+    print('Found Family:', family['titolo'])
+    
+    if not family or 'dashboard' not in family:
+        raise ValueError("No valid dashboard found for the given family ID.")
+    
+    dashboard = family['dashboard']
+    graph = {}
+    reverse_graph = {}
+    durations = {}
+    queues = {}
+    indegree = {}
+
+    elements = dashboard.get('elements', [])
+    for node in elements:
+        node_id = node['id']
+        duration = node.get('phaseDuration', 0)
+        queue = node.get('phaseTargetQueue', duration)
+
+        # Initialize the node in the graph
+        durations[node_id] = duration
+        queues[node_id] = queue
+        graph[node_id] = []
+
+        # Ensure every node is initialized in the reverse_graph (even without incoming edges)
+        if node_id not in reverse_graph:
+            reverse_graph[node_id] = []
+
+        # Process connections (outgoing edges)
+        for next_node in node.get('next', []):
+            dest_id = next_node['destElementId']
+            graph[node_id].append(dest_id)
+
+            # Increment the indegree for reverse graph construction
+            indegree[dest_id] = indegree.get(dest_id, 0) + 1
+
+            # Add to reverse graph (dest_id -> node_id)
+            if dest_id not in reverse_graph:
+                reverse_graph[dest_id] = []
+            reverse_graph[dest_id].append(node_id)
+
+    # Debugging print statements to verify structures
+    print("Graph:", graph)
+    print("Reverse Graph:", reverse_graph)
+    print("Durations:", durations)
+    print("Queues:", queues)
+    print("Indegree:", indegree)
+
+    return graph, reverse_graph, durations, queues, indegree, dashboard
+
+
+def calculate_phase_dates(end_date, phases, quantity, settings, codiceArticolo):
+    
+    settings = fetch_settings()
+    
+    print('Calculating Phase Dates')
     open_time = settings.get('orariAzienda', {}).get('inizio', {'ore': 8, 'minuti': 0})
     close_time = settings.get('orariAzienda', {}).get('fine', {'ore': 18, 'minuti': 0})
     holiday_list = settings.get('ferieAziendali', [])
     pausa_pranzo = settings.get('pausaPranzo', {'inizio': {'ore': 12, 'minuti': 0}, 'fine': {'ore': 15, 'minuti': 0}})
 
-    phase_durations = get_phase_end_times(phases)
+    print('Open Time:', open_time)
+    print('Close Time:', close_time)
+    print('Holiday Time:', holiday_list)
+    print('Pausa Time:', pausa_pranzo)
+    
+    phase_durations = get_phase_end_times(phases, codiceArticolo)
+    
+    print('Got Phase durations:', phase_durations)
+    
     entrata_coda_fase = []
+    
     
     for i, phase in enumerate(phases):
         # Calculate phase duration based on quantity
         duration = phase_durations[i] * quantity
         
+        graph, reverse_graph, durations, queues, indegree, dashboard = fetch_flowchart_data(codiceArticolo)
+        
         # Calculate start date for the phase, taking into account work hours, breaks, and holidays
         start_date = find_start_date_of_phase(
             end_date, 
-            duration, 
+            phase, #target phase
+            quantity, 
             open_time, 
             close_time, 
+            holiday_list, 
             pausa_pranzo, 
-            holiday_list
+            graph,
+            reverse_graph, 
+            queues, 
+            dashboard,
+            durations
         )
+        print("Found start_date of equal to", phase, start_date)
         
-        entrata_coda_fase.append(start_date)
+        if start_date:
+            # Append the queue or cycle start date as a single-layer array
+            if start_date[0][0] < start_date[1][0]:
+                entrata_coda_fase.append(start_date[0][0])  # Queue start is earlier
+            else:
+                entrata_coda_fase.append(start_date[1][0])  # Cycle start is earlier
+        else:
+            # Default handling if None is returned
+            entrata_coda_fase.append(None)
+
         # Update end_date to the start date of the current phase for the next iteration
-        end_date = start_date
+        end_date = start_date[0][0] if start_date else end_date
     
-    print(entrata_coda_fase)
+    print('Entrata coda phase:', entrata_coda_fase)
     return entrata_coda_fase
 
-def find_start_date_of_phase(end_date, duration, open_time, close_time, pausa_pranzo, holiday_list):
+
+def get_graph_layers_from_end(graph, reverse_graph):
+    local_reverse_graph = reverse_graph.copy()
+    layers = []
+    visited = set()
+    queue = []
+
+    # Identify all end nodes (nodes with no outgoing edges)
+    for node_id, edges in graph.items():
+        if not edges:
+            queue.append(node_id)
+            visited.add(node_id)
+
+    # Start from end nodes and traverse backwards
+    while queue:
+        current_layer = []
+        layer_size = len(queue)
+
+        for _ in range(layer_size):
+            node_id = queue.pop(0)
+            current_layer.append(node_id)
+
+            # Traverse to all nodes pointing to the current node (predecessors)
+            if node_id in local_reverse_graph:
+                for predecessor in local_reverse_graph[node_id]:
+                    if predecessor not in visited:
+                        queue.append(predecessor)
+                        visited.add(predecessor)
+
+        layers.insert(0, current_layer)
+
+    return layers
+
+
+def find_start_date_of_phase(end_date, target_phase, quantity, open_time, close_time, holiday_list, pausa_pranzo, graph, reverse_graph, queues, dashboard, durations, duration=-1):
     """
-    Recursively calculates the start date of a phase by moving backwards from the end date.
-    Accounts for working hours, lunch breaks, holidays, and weekends.
+    Find the start date of a phase by traversing backwards from the end nodes.
     """
-    # Calculate the duration of a workday in minutes (excluding the lunch break)
-    workday_start = datetime.timedelta(hours=open_time['ore'], minutes=open_time['minuti'])
-    workday_end = datetime.timedelta(hours=close_time['ore'], minutes=close_time['minuti'])
-    lunch_start = datetime.timedelta(hours=pausa_pranzo['inizio']['ore'], minutes=pausa_pranzo['inizio']['minuti'])
-    lunch_end = datetime.timedelta(hours=pausa_pranzo['fine']['ore'], minutes=pausa_pranzo['fine']['minuti'])
+    print('Trying to find Start date of phase for', target_phase)
     
-    # Total working time in a day excluding the lunch break
-    workday_duration = (workday_end - workday_start).total_seconds() / 60
-    lunch_duration = (lunch_end - lunch_start).total_seconds() / 60
-    effective_workday_minutes = workday_duration - lunch_duration
+     # Create a mapping of phase names to node IDs
+    phase_name_to_id = {node['text']: node['id'] for node in dashboard.get('elements', [])}
     
-    # Calculate how many full workdays are required
-    full_workdays_needed = duration // effective_workday_minutes
-    remaining_minutes = duration % effective_workday_minutes
+    # Check if the target_phase exists in the mapping
+    if target_phase not in phase_name_to_id:
+        raise ValueError(f"Target phase '{target_phase}' not found in the dashboard.")
+    
+    # Get the node ID corresponding to the target phase
+    target_phase_id = phase_name_to_id[target_phase]
+    print(f"Target phase '{target_phase}' corresponds to node ID: {target_phase_id}")
+    
+    # Function to traverse the graph backwards from the end nodes to find the target phase
+    def traverse_backwards(current_id):
+        print(f"Traversing node: {current_id}, looking for target phase: {target_phase_id}")
+        if current_id == target_phase_id:
+            print(f"Found target phase: {current_id}")    
+            return [queues[current_id], duration if duration >= 0 else durations[current_id] * quantity]
+        
+        if current_id not in reverse_graph:
+            print('Target phase not in reverse_graph: returning None', current_id)
+            return None
+        
+        for prev_id in reverse_graph[current_id]:
+            print(f"Traversing to previous node: {prev_id}")
+            result = traverse_backwards(prev_id)
+            if result:
+                print(f"Found path from {current_id} to {prev_id}: {result}")
+                return [result[0] + queues[current_id], result[1] + (duration if duration >= 0 else durations[current_id] * quantity)]
+            
+        print(f"No valid path found for node: {current_id}")
+        return None
 
-    # Move the end date back by the full workdays, skipping weekends and holidays
-    start_date = subtract_workdays(end_date, full_workdays_needed, open_time, close_time, holiday_list)
+    # Calculate time durations
+    pausa_duration = (timedelta(hours=pausa_pranzo['fine']['ore'], minutes=pausa_pranzo['fine']['minuti']) -
+                      timedelta(hours=pausa_pranzo['inizio']['ore'], minutes=pausa_pranzo['inizio']['minuti']))
     
-    # Now handle the remaining minutes
-    while remaining_minutes > 0:
-        # If the current day is a weekend or holiday, skip it
-        if start_date.weekday() >= 5 or is_holiday(start_date, holiday_list):
-            start_date -= datetime.timedelta(days=1)
-            continue
-
-        # Define workday start and end times for the current day
-        workday_start_dt = start_date.replace(hour=open_time['ore'], minute=open_time['minuti'])
-        workday_end_dt = start_date.replace(hour=close_time['ore'], minute=close_time['minuti'])
-
-        # Check if we can fit the remaining minutes in the current workday
-        if remaining_minutes <= (workday_end_dt - workday_start_dt).total_seconds() / 60:
-            start_date -= datetime.timedelta(minutes=remaining_minutes)
-            remaining_minutes = 0
-        else:
-            # Subtract a full workday and continue
-            remaining_minutes -= effective_workday_minutes
-            start_date -= datetime.timedelta(days=1)
+    print('Found pausa_duration equal to', pausa_duration)
     
-    return start_date
+    minutes_in_day = (timedelta(hours=close_time['ore'], minutes=close_time['minuti']) -
+                      timedelta(hours=open_time['ore'], minutes=open_time['minuti']) -
+                      pausa_duration).total_seconds() / 60
+    
+    print('Found minutes_in_day equal to', minutes_in_day)
+    
+    print("Check the structure of reverse_graph ", reverse_graph)  
+    
+    end_nodes = [node_id for node_id, edges in graph.items() if not edges]
+    
+    print('End nodes: ', end_nodes)
+    
+    for end_node in end_nodes:
+        print("Trying to traverse_backwards")
+        total_minutes = traverse_backwards(end_node)
+        print('Finished traverse_backwards, total_minutes:', total_minutes)
+        if total_minutes:
+            # Calculate working days required for queue and cycle times
+            def calculate_possible_date(total_minutes, end_date):
+                possible_date = end_date - timedelta(days=total_minutes // minutes_in_day,
+                                                     minutes=total_minutes % minutes_in_day)
+                is_possible_date = False
+                
+                # Check for weekends and holidays
+                while not is_possible_date:
+                    if possible_date.weekday() in [5, 6]:  # Saturday (5) or Sunday (6)
+                        possible_date -= timedelta(days=2)
+                        continue
+
+                    is_holiday = any(holiday['inizio'] <= possible_date <= holiday['fine'] for holiday in holiday_list)
+                    if is_holiday:
+                        possible_date -= timedelta(days=1)
+                        continue
+
+                    is_possible_date = True
+                    print('Found that order is possible, returning True')
+
+                return possible_date
+
+            # Calculate the possible queue and cycle dates
+            possible_queue_date = calculate_possible_date(total_minutes[0], end_date)
+            possible_cycle_date = calculate_possible_date(total_minutes[1], end_date)
+            
+            print('Found possible_queue_date and possible_cycle_date', possible_queue_date, possible_cycle_date)
+
+            return [[possible_queue_date], [possible_cycle_date]]
+
+    return None
+
+
+# def find_start_date_of_phase(end_date, duration, open_time, close_time, pausa_pranzo, holiday_list):
+#     """
+#     Recursively calculates the start date of a phase by moving backwards from the end date.
+#     Accounts for working hours, lunch breaks, holidays, and weekends.
+#     """
+#     # Calculate the duration of a workday in minutes (excluding the lunch break)
+#     workday_start = datetime.timedelta(hours=open_time['ore'], minutes=open_time['minuti'])
+#     workday_end = datetime.timedelta(hours=close_time['ore'], minutes=close_time['minuti'])
+#     lunch_start = datetime.timedelta(hours=pausa_pranzo['inizio']['ore'], minutes=pausa_pranzo['inizio']['minuti'])
+#     lunch_end = datetime.timedelta(hours=pausa_pranzo['fine']['ore'], minutes=pausa_pranzo['fine']['minuti'])
+    
+#     # Total working time in a day excluding the lunch break
+#     workday_duration = (workday_end - workday_start).total_seconds() / 60
+#     lunch_duration = (lunch_end - lunch_start).total_seconds() / 60
+#     effective_workday_minutes = workday_duration - lunch_duration
+    
+#     # Calculate how many full workdays are required
+#     full_workdays_needed = duration // effective_workday_minutes
+#     remaining_minutes = duration % effective_workday_minutes
+
+#     # Move the end date back by the full workdays, skipping weekends and holidays
+#     start_date = subtract_workdays(end_date, full_workdays_needed, open_time, close_time, holiday_list)
+    
+#     # Now handle the remaining minutes
+#     while remaining_minutes > 0:
+#         # If the current day is a weekend or holiday, skip it
+#         if start_date.weekday() >= 5 or is_holiday(start_date, holiday_list):
+#             start_date -= datetime.timedelta(days=1)
+#             continue
+
+#         # Define workday start and end times for the current day
+#         workday_start_dt = start_date.replace(hour=open_time['ore'], minute=open_time['minuti'])
+#         workday_end_dt = start_date.replace(hour=close_time['ore'], minute=close_time['minuti'])
+
+#         # Check if we can fit the remaining minutes in the current workday
+#         if remaining_minutes <= (workday_end_dt - workday_start_dt).total_seconds() / 60:
+#             start_date -= datetime.timedelta(minutes=remaining_minutes)
+#             remaining_minutes = 0
+#         else:
+#             # Subtract a full workday and continue
+#             remaining_minutes -= effective_workday_minutes
+#             start_date -= datetime.timedelta(days=1)
+    
+#     return start_date
 
 def subtract_workdays(end_date, workdays, open_time, close_time, holiday_list):
     """
@@ -192,33 +478,34 @@ def is_holiday(date, holiday_list):
     return False
 
 def create_order_object(phases, articolo, quantity, order_id, end_date, order_description, settings):
-    # Using the settings to calculate open times, close times, holidays, etc.
-    # print('Creating Order Object')
-    phase_dates = calculate_phase_dates(end_date, phases, quantity, settings)
-    print(phase_dates)
+    # Calculate phase dates
+    phase_dates = calculate_phase_dates(end_date, phases, quantity, settings, articolo)
+    print("Phase dates array:", phase_dates)
 
+    # Align order structure with Flutter
     order_object = {
         "orderId": str(order_id),
         "orderInsertDate": datetime.datetime.now(),
-        "orderStartDate": phase_dates[0],
-        "assignedOperator": [[""] for _ in phases],
-        "orderStatus": 0,  # Initial order status
-        "orderDescription": order_description or '', 
+        "orderStartDate": phase_dates[0],  # Start date based on calculated phase dates
+        "assignedOperator": [[""] for _ in phases],  # Default empty assigned operator
+        "orderStatus": 0,  # Initial status
+        "orderDescription": order_description or '',
         "codiceArticolo": articolo,
         "orderDeadline": end_date,
         "customerDeadline": end_date,
         "quantita": int(quantity),
-        "phase": [[p] for p in phases],
-        "phaseStatus": [[1] for _ in phases],  # Initial phase statuses
-        "phaseEndTime": [[et] for et in get_phase_end_times(phases)],
-        "phaseLateMotivation": [["none"] for _ in phases],
-        "phaseRealTime": [[0] for _ in phases],
-        "entrataCodaFase": [[date] for date in phase_dates],
-        "priority": 0,
-        "inCodaAt": []
+        "phase": [[p] for p in phases],  # List of phases
+        "phaseStatus": [[1] for _ in phases],  # Default status
+        "phaseEndTime": [[et * quantity] for et in get_phase_end_times(phases, articolo)],  # Phase end times
+        "phaseLateMotivation": [["none"] for _ in phases],  # Default empty motivation
+        "phaseRealTime": [[0] for _ in phases],  # Default real-time
+        "entrataCodaFase": [[date] for date in phase_dates],  # Queue entry dates
+        "priority": 0,  # Default priority
+        "inCodaAt": []  # Default in-queue status
     }
     
     return order_object
+
 
 def create_json_for_flowchart(codice, phases, cycle_times, description):
         element_ids = [str(ObjectId()) for _ in phases]
@@ -444,6 +731,7 @@ def upload_orders_from_xlsx_amade(self):
             }
             
     settings = fetch_settings() 
+    print('got settings')
 
     # Process each order
     for idx, row in orders_df.iterrows():
@@ -456,7 +744,8 @@ def upload_orders_from_xlsx_amade(self):
         if ordineId in existing_order_ids:
             skipped_orders.append(ordineId)
             continue  # Skip processing this order
-    
+        
+        print('Trying to check data Rcihesta')
         # Validate dataRichiesta
         if pd.isnull(dataRichiesta):
             failed_orders.append({'ordineId': ordineId, 'codiceArticolo': codiceArticolo, 'reason': 'Data Richiesta is null'})
@@ -470,6 +759,8 @@ def upload_orders_from_xlsx_amade(self):
                 failed_orders.append({'ordineId': ordineId, 'codiceArticolo': codiceArticolo, 'reason': f'Invalid date: {dataRichiesta}'})
                 continue
 
+        print('Data Rcihesta is good')
+        
         # Check if the 'codiceArticolo' exists in 'catalogo'
         catalog_info = prodId_to_catalog_info.get(codiceArticolo)
         if not catalog_info:
@@ -484,6 +775,7 @@ def upload_orders_from_xlsx_amade(self):
         end_date = dataRichiesta
         order_description = infoAggiuntive
 
+        print('Trying to create order object')
         # Create the order object using the provided function
         try:
             order_document = create_order_object(
@@ -498,6 +790,7 @@ def upload_orders_from_xlsx_amade(self):
         except Exception as e:
             failed_orders.append({'ordineId': ordineId, 'codiceArticolo': codiceArticolo, 'reason': f'Error creating order object: {e}'})
             continue
+        print('Order object created')
 
         # Insert the order into the 'orders' collection
         try:
@@ -599,6 +892,7 @@ def create_order_object_with_dates(phases, codice_articolo, quantita, order_id, 
             end_date = datetime.datetime(int(end_date.split("/")[2]), int(end_date.split("/")[1]), int(end_date.split("/")[0]), close_time['ore'], close_time['minuti'])
 
         start_date = find_start_date_of_phase(end_date, phase, quantita, open_time, holiday_list, pausa_pranzo, graph, durations)
+        print("Found start_date of equal to", phase, start_date)
         entrata_coda_fase.append([start_date])#(int(start_date.timestamp() * 1000)) if start_date else None)
 
     non_null_dates = [date for date in entrata_coda_fase if date is not None]

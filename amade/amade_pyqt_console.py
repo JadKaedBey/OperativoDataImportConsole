@@ -543,6 +543,14 @@ def create_order_object(phases, articolo, quantity, order_id, end_date, order_de
     print('settings:', settings)
     print('articolo:', articolo)
     phase_dates = calculate_phase_dates(end_date, phases, quantity, settings, articolo) #returns entrata coda fase
+    
+    # Check if phase_dates is sorted in increasing order
+    if phase_dates != sorted(phase_dates):
+        # If not sorted, reverse the array
+        phase_dates.reverse()
+        print('Phase dates after sorting check:', phase_dates)
+
+    # Print or return phase_dates as needed
     print("Phase dates (entrara coda fase) array:", phase_dates)
     
     filtered_dates = [date for date in phase_dates if date is not None]

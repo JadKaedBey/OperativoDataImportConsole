@@ -76,17 +76,6 @@ def fetch_settings():
     
     return settings
 
-# def get_phase_end_times(phases):
-#     # Fetch the phase end times from the database
-#     end_times = []
-#     process_db = client['process_db']
-#     for phase in phases:
-#         phase_info = process_db['macchinari'].find_one({"name": phase})
-#         print('Got Phase end time:' + phase_info)
-#         end_times.append(phase_info.get('queueTargetTime', 0) if phase_info else 0)
-        
-#     return end_times
-
 def get_phase_end_times(phases, codiceArticolo):
     # Initialize the list to store phase end times
     end_times = []
@@ -458,50 +447,7 @@ def find_start_date_of_phase(end_date, target_phase, quantity, open_time, close_
 
     return None
 
-# def find_start_date_of_phase(end_date, duration, open_time, close_time, pausa_pranzo, holiday_list):
-#     """
-#     Recursively calculates the start date of a phase by moving backwards from the end date.
-#     Accounts for working hours, lunch breaks, holidays, and weekends.
-#     """
-#     # Calculate the duration of a workday in minutes (excluding the lunch break)
-#     workday_start = datetime.timedelta(hours=open_time['ore'], minutes=open_time['minuti'])
-#     workday_end = datetime.timedelta(hours=close_time['ore'], minutes=close_time['minuti'])
-#     lunch_start = datetime.timedelta(hours=pausa_pranzo['inizio']['ore'], minutes=pausa_pranzo['inizio']['minuti'])
-#     lunch_end = datetime.timedelta(hours=pausa_pranzo['fine']['ore'], minutes=pausa_pranzo['fine']['minuti'])
-    
-#     # Total working time in a day excluding the lunch break
-#     workday_duration = (workday_end - workday_start).total_seconds() / 60
-#     lunch_duration = (lunch_end - lunch_start).total_seconds() / 60
-#     effective_workday_minutes = workday_duration - lunch_duration
-    
-#     # Calculate how many full workdays are required
-#     full_workdays_needed = duration // effective_workday_minutes
-#     remaining_minutes = duration % effective_workday_minutes
-
-#     # Move the end date back by the full workdays, skipping weekends and holidays
-#     start_date = subtract_workdays(end_date, full_workdays_needed, open_time, close_time, holiday_list)
-    
-#     # Now handle the remaining minutes
-#     while remaining_minutes > 0:
-#         # If the current day is a weekend or holiday, skip it
-#         if start_date.weekday() >= 5 or is_holiday(start_date, holiday_list):
-#             start_date -= datetime.timedelta(days=1)
-#             continue
-
-#         # Define workday start and end times for the current day
-#         workday_start_dt = start_date.replace(hour=open_time['ore'], minute=open_time['minuti'])
-#         workday_end_dt = start_date.replace(hour=close_time['ore'], minute=close_time['minuti'])
-
-#         # Check if we can fit the remaining minutes in the current workday
-#         if remaining_minutes <= (workday_end_dt - workday_start_dt).total_seconds() / 60:
-#             start_date -= datetime.timedelta(minutes=remaining_minutes)
-#             remaining_minutes = 0
-#         else:
-#             # Subtract a full workday and continue
-#             remaining_minutes -= effective_workday_minutes
-#             start_date -= datetime.timedelta(days=1)
-    
-#     return start_date
+# Utils
 
 def subtract_workdays(end_date, workdays, open_time, close_time, holiday_list):
     """
@@ -534,6 +480,9 @@ def is_holiday(date, holiday_list):
             return True
     return False
 
+
+# Orders
+
 def create_order_object(phases, articolo, quantity, order_id, end_date, order_description, settings):
     # Calculate phase dates
     print('Passing to calculate_phase_dates:')
@@ -545,8 +494,8 @@ def create_order_object(phases, articolo, quantity, order_id, end_date, order_de
     phase_dates = calculate_phase_dates(end_date, phases, quantity, settings, articolo) #returns entrata coda fase
     
     # Check if phase_dates is sorted in increasing order
-    if phase_dates != sorted(phase_dates):
-        # If not sorted, reverse the array
+    if phase_dates != sorted(phase_dates): 
+        # If not sorted (increasing order), reverse the array (because the starting date is at the end)
         phase_dates.reverse()
         print('Phase dates after sorting check:', phase_dates)
 
@@ -562,7 +511,6 @@ def create_order_object(phases, articolo, quantity, order_id, end_date, order_de
         start_date = None
         print('Order Start Date could not be calculated')
         
-    # Align order structure with Flutter
     order_object = {
         "orderId": str(order_id),
         "orderInsertDate": datetime.datetime.now(),
@@ -581,125 +529,109 @@ def create_order_object(phases, articolo, quantity, order_id, end_date, order_de
         "phaseRealTime": [[0] for _ in phases],  # Default real-time
         "entrataCodaFase": [[date] for date in phase_dates],  # Queue entry dates
         "priority": 0,  # Default priority
-        "inCodaAt": []  # Default in-queue status
+        "inCodaAt": [],  
+        "inLavorazioneAt": [[""] for _ in phases],
+
     }
     
     return order_object
 
-def create_json_for_flowchart(codice, phases, cycle_times, description):
-        element_ids = [str(ObjectId()) for _ in phases]
-        dashboard_elements = []
-        for i, (phase, time) in enumerate(zip(phases, cycle_times)):
-            element = {
-                "positionDx": 101.2 + 200 * i,
-                "positionDy": 240.2,
-                "size.width": 100.0, 
-                "size.height": 50.0,
-                "text": phase,
-                "textColor": 4278190080,
-                "fontFamily": None,
-                "textSize": 12.0,
-                "textIsBold": False,
-                "id": element_ids[i],
-                "kind": 0,
-                "handlers": [3, 2],
-                "handlerSize": 15.0,
-                "backgroundColor": 4294967295,
-                "borderColor": 4293336434,
-                "borderThickness": 3.0,
-                "elevation": 4.0,
-                "next": [],
-                "phaseDuration": int(time)
-            }
-            if i < len(phases) - 1:
-                element['next'].append({
-                    "destElementId": element_ids[i + 1],
-                    "arrowParams": {
-                        "thickness": 1.7,
-                        "headRadius": 6.0,
-                        "tailLength": 25.0,
-                        "color": 4278190080,
-                        "style": 0,
-                        "tension": 1.0,
-                        "startArrowPositionX": 1.0,
-                        "startArrowPositionY": 0.0,
-                        "endArrowPositionX": -1.0,
-                        "endArrowPositionY": 0.0
-                    },
-                    "pivots": []
-                })
-            dashboard_elements.append(element)
-        json_output = {
-            "_id": ObjectId(),
-            "titolo": codice,
-            "descrizione": description,
-            "image": "https://upload.wikimedia.org/wikipedia/commons/1/14/No_Image_Available.jpg",
-            "dashboard": {
-                "elements": dashboard_elements,
-                "dashboardSizeWidth": 1279.0,
-                "dashboardSizeHeight": 566.72,
-                "gridBackgroundParams": {
-                    "offset.dx": -580.4256299112267, 
-                    "offset.dy": -150.19796474249733,
-                    "scale": 1.0,
-                    "gridSquare": 20.0,
-                    "gridThickness": 0.7,
-                    "secondarySquareStep": 5,
-                    "backgroundColor": 4294967295,
-                    "gridColor": 520093696
-                },
-                "blockDefaultZoomGestures": False,
-                "minimumZoomFactor": 0.25,
-                "arrowStyle": 0
-            },
-            "catalogo": [{
-                "_id": ObjectId(),
-                "prodId": codice,  
-                "prodotto": codice, 
-                "descrizione": description,
-                "famiglia": codice,
-                "elements": [
-                    {
-                        "pId": element_ids[i],
-                        "property": "Example property", # Placeholder
-                        "duration": int(time)
-                    } for i, time in enumerate(cycle_times)
-                ]
-            }]
+def create_json_for_flowchart(codice, phases, cycle_times, queueTargetTimes, description):
+    """ Creates Family Json object 
+
+    Args:
+        codice (_type_): _description_
+        phases (_type_): _description_
+        cycle_times (_type_): _description_
+        description (_type_): _description_
+
+    Returns:
+        _type_: _description_
+    """
+    element_ids = [str(ObjectId()) for _ in phases]
+    dashboard_elements = []
+    for i, (phase, time, targetTime) in enumerate(zip(phases, cycle_times, queueTargetTimes)):
+        element = {
+            "positionDx": 101.2 + 200 * i,
+            "positionDy": 240.2,
+            "size.width": 100.0, 
+            "size.height": 50.0,
+            "text": phase,
+            "textColor": 4278190080,
+            "fontFamily": None,
+            "textSize": 12.0,
+            "textIsBold": False,
+            "id": element_ids[i],
+            "kind": 0,
+            "handlers": [3, 2],
+            "handlerSize": 15.0,
+            "backgroundColor": 4294967295,
+            "borderColor": 4293336434,
+            "borderThickness": 3.0,
+            "elevation": 4.0,
+            "next": [],
+            "phaseDuration": int(time),
+            "phaseTargetQueue": targetTime
         }
-        return json_output
-    
-def map_phases(phase_string):
-    # Define the mappings
-    phase_mappings = {
-        'lavmec': 'Filettatura/Foratura',
-        'lav mecc': 'Filettatura/Foratura',
-        'taglio': 'Taglio',
-        'piega': 'Piega 1',
-        'smerigliatura/insertaggio': 'Smerigliatura',
-        'saldatura': 'Saldatura'
+        if i < len(phases) - 1:
+            element['next'].append({
+                "destElementId": element_ids[i + 1],
+                "arrowParams": {
+                    "thickness": 1.7,
+                    "headRadius": 6.0,
+                    "tailLength": 25.0,
+                    "color": 4278190080,
+                    "style": 0,
+                    "tension": 1.0,
+                    "startArrowPositionX": 1.0,
+                    "startArrowPositionY": 0.0,
+                    "endArrowPositionX": -1.0,
+                    "endArrowPositionY": 0.0
+                },
+                "pivots": []
+            })
+        dashboard_elements.append(element)
+    json_output = {
+        "_id": ObjectId(),
+        "titolo": codice,
+        "descrizione": description,
+        "image": "https://upload.wikimedia.org/wikipedia/commons/1/14/No_Image_Available.jpg",
+        "dashboard": {
+            "elements": dashboard_elements,
+            "dashboardSizeWidth": 1279.0,
+            "dashboardSizeHeight": 566.72,
+            "gridBackgroundParams": {
+                "offset.dx": -580.4256299112267, 
+                "offset.dy": -150.19796474249733,
+                "scale": 1.0,
+                "gridSquare": 20.0,
+                "gridThickness": 0.7,
+                "secondarySquareStep": 5,
+                "backgroundColor": 4294967295,
+                "gridColor": 520093696
+            },
+            "blockDefaultZoomGestures": False,
+            "minimumZoomFactor": 0.25,
+            "arrowStyle": 0
+        },
+        "catalogo": [{
+            "_id": ObjectId(),
+            "prodId": codice,  
+            "prodotto": codice, 
+            "descrizione": description,
+            "famiglia": codice,
+            "elements": [
+                {
+                    "pId": element_ids[i],
+                    "property": "Example property", # Placeholder
+                    "duration": int(time)
+                } for i, time in enumerate(cycle_times)
+            ]
+        }]
     }
+    return json_output
     
-    # Split the phase string into individual phases
-    separators = ['-', '+']
-    for sep in separators:
-        if sep in phase_string:
-            phases = phase_string.split(sep)
-            break
-    else:
-        phases = [phase_string]  # If no separator is found, treat as a single phase
-    
-    # Map the phases using the predefined mappings
-    mapped_phases = []
-    for phase in phases:
-        phase = phase.strip()
-        for key in phase_mappings:
-            if key in phase:
-                mapped_phases.append(phase_mappings[key])
-                break
-    
-    return mapped_phases
-    
+
 def excel_date_parser(date_str):
     return pd.to_datetime(date_str, dayfirst=True, errors='coerce')
         
@@ -861,6 +793,8 @@ def upload_orders_from_xlsx_amade(self):
     # Show a report of the upload process
     show_upload_report(successful_orders, failed_orders, skipped_orders)
 
+# Reporting Functions
+
 def show_upload_report(successful_orders, failed_orders, skipped_orders):
     report_message = "Upload Report:\n\n"
 
@@ -901,13 +835,47 @@ def save_report_to_file(report_content, report_type):
     except Exception as e:
         print(f"Failed to save report: {e}")
 
+
+## DEPRECATED
+
+def map_phases(phase_string):
+    # Define the mappings
+    phase_mappings = {
+        'lavmec': 'Filettatura/Foratura',
+        'lav mecc': 'Filettatura/Foratura',
+        'taglio': 'Taglio',
+        'piega': 'Piega 1',
+        'smerigliatura/insertaggio': 'Smerigliatura',
+        'saldatura': 'Saldatura'
+    }
+    
+    # Split the phase string into individual phases
+    separators = ['-', '+']
+    for sep in separators:
+        if sep in phase_string:
+            phases = phase_string.split(sep)
+            break
+    else:
+        phases = [phase_string]  # If no separator is found, treat as a single phase
+    
+    # Map the phases using the predefined mappings
+    mapped_phases = []
+    for phase in phases:
+        phase = phase.strip()
+        for key in phase_mappings:
+            if key in phase:
+                mapped_phases.append(phase_mappings[key])
+                break
+    
+    return mapped_phases
+    
+
 def check_missing_families(articoli_checks):
     missing_families = [check['Famiglia'] for check in articoli_checks if not check['FamigliaExists']]
     
     if missing_families:
         QMessageBox.warning(None, "Missing Families", "The following families are missing in the database:\n" + "\n".join(missing_families))
 
-## DEPRECATED
 
 def create_order_object_with_dates(phases, codice_articolo, quantita, order_id, end_date, customer_deadline):
     ""
@@ -977,6 +945,10 @@ def create_order_object_with_dates(phases, codice_articolo, quantita, order_id, 
     return order_object
 
 def get_procedure_phases_by_prodId(prodId):
+    ""
+    # Not currently Used
+    ""
+    
     db = client['process_db']
     collection = db['famiglie_di_prodotto']
     
@@ -1061,19 +1033,9 @@ class LoginWindow(QDialog):
         username = self.username_input.text()
         password = self.password_input.text()
         if connect_to_mongodb(username, password):
-            self.user_role = get_user_role(username)
             self.accept()
         else:
             QMessageBox.critical(self, "Login Failed", "Invalid username or password")
-            
-def get_user_role(username):
-    # This is a placeholder function. You should implement the actual logic to retrieve the user role
-    # For demonstration:
-    if username == "marcolin":
-        return "marcolin_role"
-    else:
-        return "regular_role"
-    
 
 class MainWindow(QMainWindow):
     def __init__(self, user_role):
@@ -1176,22 +1138,6 @@ class MainWindow(QMainWindow):
         self.image_width = self.window_width * 0.3
         self.image_height = self.window_height * 0.3
 
-    def queue_data(self):
-        global queued_df
-        filename, _ = QFileDialog.getOpenFileName(self, "Open CSV", "", "CSV files (*.csv)")
-        if filename:
-            queued_df = pd.read_csv(filename)
-            self.display_data()
-
-    def display_data(self):
-        self.table.clear()
-        if not queued_df.empty:
-            self.table.setRowCount(queued_df.shape[0])
-            self.table.setColumnCount(queued_df.shape[1])
-            self.table.setHorizontalHeaderLabels(queued_df.columns)
-            for i in range(queued_df.shape[0]):
-                for j in range(queued_df.shape[1]):
-                    self.table.setItem(i, j, QTableWidgetItem(str(queued_df.iat[i, j])))
 
     def generate_and_save_qr_codes(self):
         if not os.path.exists(self.qr_save_path):
@@ -1323,32 +1269,6 @@ class MainWindow(QMainWindow):
         # Save the image
         new_img.save(full_path)
 
-
-
-    def upload_queued_data(self):
-        """"""
-        DeprecationWarning
-        """"""
-        global queued_df
-        print("Attempting to upload data...")
-        if not queued_df.empty:
-            reply = QMessageBox.question(self, "Confirm Upload", "Are you sure you want to upload the queued data?",
-                                         QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
-            if reply == QMessageBox.Yes:
-                try:
-                    data_to_upload = queued_df.to_dict('records')
-                    db = client['processes_db']
-                    collection = db['macchinari']
-                    collection.insert_many(data_to_upload)
-                    QMessageBox.information(self, "Upload Complete", "Data has been successfully uploaded.")
-                    self.clear_data()
-                except Exception as e:
-                    print(f"Error uploading data: {e}")
-                    QMessageBox.critical(self, "Upload Failed", f"Failed to upload data: {e}")
-
-    def clear_data(self):
-        self.table.clear()
-
     def init_placeholder(self):
         self.table.setRowCount(1)
         self.table.setColumnCount(1)
@@ -1425,7 +1345,7 @@ class MainWindow(QMainWindow):
                 description = group['Descrizione'].iloc[0] + " " + " ".join(group['Accessori'].dropna().unique())
 
                 print(f"Creating and uploading JSON for Codice: {codice}")
-                json_object = create_json_for_flowchart(codice, fasi, tempo_ciclo, description)
+                json_object = create_json_for_flowchart(codice, fasi, tempo_ciclo, lt_fase, description)
 
                 # Upload JSON object directly to MongoDB
                 collection.insert_one(json_object)
@@ -1642,3 +1562,50 @@ if __name__ == '__main__':
         main_window = MainWindow(login.user_role)
         main_window.show()
         sys.exit(app.exec_())
+
+
+
+# def find_start_date_of_phase(end_date, duration, open_time, close_time, pausa_pranzo, holiday_list):
+#     """
+#     Recursively calculates the start date of a phase by moving backwards from the end date.
+#     Accounts for working hours, lunch breaks, holidays, and weekends.
+#     """
+#     # Calculate the duration of a workday in minutes (excluding the lunch break)
+#     workday_start = datetime.timedelta(hours=open_time['ore'], minutes=open_time['minuti'])
+#     workday_end = datetime.timedelta(hours=close_time['ore'], minutes=close_time['minuti'])
+#     lunch_start = datetime.timedelta(hours=pausa_pranzo['inizio']['ore'], minutes=pausa_pranzo['inizio']['minuti'])
+#     lunch_end = datetime.timedelta(hours=pausa_pranzo['fine']['ore'], minutes=pausa_pranzo['fine']['minuti'])
+    
+#     # Total working time in a day excluding the lunch break
+#     workday_duration = (workday_end - workday_start).total_seconds() / 60
+#     lunch_duration = (lunch_end - lunch_start).total_seconds() / 60
+#     effective_workday_minutes = workday_duration - lunch_duration
+    
+#     # Calculate how many full workdays are required
+#     full_workdays_needed = duration // effective_workday_minutes
+#     remaining_minutes = duration % effective_workday_minutes
+
+#     # Move the end date back by the full workdays, skipping weekends and holidays
+#     start_date = subtract_workdays(end_date, full_workdays_needed, open_time, close_time, holiday_list)
+    
+#     # Now handle the remaining minutes
+#     while remaining_minutes > 0:
+#         # If the current day is a weekend or holiday, skip it
+#         if start_date.weekday() >= 5 or is_holiday(start_date, holiday_list):
+#             start_date -= datetime.timedelta(days=1)
+#             continue
+
+#         # Define workday start and end times for the current day
+#         workday_start_dt = start_date.replace(hour=open_time['ore'], minute=open_time['minuti'])
+#         workday_end_dt = start_date.replace(hour=close_time['ore'], minute=close_time['minuti'])
+
+#         # Check if we can fit the remaining minutes in the current workday
+#         if remaining_minutes <= (workday_end_dt - workday_start_dt).total_seconds() / 60:
+#             start_date -= datetime.timedelta(minutes=remaining_minutes)
+#             remaining_minutes = 0
+#         else:
+#             # Subtract a full workday and continue
+#             remaining_minutes -= effective_workday_minutes
+#             start_date -= datetime.timedelta(days=1)
+    
+#     return start_date

@@ -1,4 +1,3 @@
-import os
 import sys
 from PyQt5.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QPushButton, QWidget, QLabel, QTableWidget, \
     QTableWidgetItem, QFileDialog, QMessageBox, QLineEdit, QDialog, QGridLayout, QComboBox, QDialogButtonBox, QHBoxLayout
@@ -9,221 +8,31 @@ from pymongo import MongoClient
 from pymongo.server_api import ServerApi
 from math import floor
 from PIL import Image, ImageDraw, ImageFont
-from bson import ObjectId
-import datetime
-import json
-from dotenv import load_dotenv
 import qrcode
+import os
+import datetime
+from bson import ObjectId
+from dotenv import load_dotenv
+from datetime import timedelta
+from functools import reduce
 
-load_dotenv()
-# Initialize global variable
 queued_df = pd.DataFrame()
-client = None  # Initialize client variable
-login_logo = Image.open(r".\img\OPERATIVO_L_Main_Color.png")
-login_logo_width = 1654
-login_logo_length = 1246
+client = None  # Initialize MongoDB client variable
+try:
+    login_logo = Image.open(r".\img\OPERATIVO_L_Main_Color.png")
+except FileNotFoundError:
+    print("Image not found. Continuing with the rest of the script.")
+    login_logo = None
+        
+logo_width = 1654
+logo_length = 1246
 
 original_logo = login_logo
-original_logo_length = 1246
 
 window_width = 1600
 window_height = 1600
 
-def process_articoli_sheet(articoli_df, db):
-    family_collection = db['famiglie_di_prodotto']
-    all_families = family_collection.find()
-    
-    # Create family and product mappings from the DB
-    family_mapping = {}
-    product_mapping = {}
-    
-    for family in all_families:
-        titolo = family['titolo']
-        family_mapping[titolo] = family
-        for product in family['catalogo']:
-            product_mapping[product['prodId']] = titolo
-    
-    # Iterate through the articoli sheet and check against the DB mappings
-    missing_families = []
-    article_check = []
-    
-    for index, row in articoli_df.iterrows():
-        codice_articolo = row['Codice Articolo']
-        famiglia = row['Famiglia di prodotto']
-        
-        if famiglia not in family_mapping:
-            missing_families.append(famiglia)
-        else:
-            article_check.append({
-                'Codice Articolo': codice_articolo,
-                'Famiglia': famiglia,
-                'Present': codice_articolo in product_mapping
-            })
-    
-    return article_check, missing_families
-
-def process_ordini_sheet(ordini_df, article_check, db):
-    orders_collection = db['ordini']
-    
-    successful_orders = []
-    failed_orders = []
-    
-    # Iterate through the orders sheet and validate against articoli checks
-    for index, row in ordini_df.iterrows():
-        codice_articolo = row['Codice Articolo']
-        order_id = row['Id Ordine']
-        
-        # Find the corresponding articolo check
-        articolo = next((a for a in article_check if a['Codice Articolo'] == codice_articolo), None)
-        
-        if articolo and articolo['Present']:
-            # Create the order in MongoDB
-            order = {
-                "orderId": str(order_id),
-                "codiceArticolo": codice_articolo,
-                "quantita": row['QTA'],
-                "dataRichiesta": row['Data Richiesta'],
-                "infoAggiuntive": row['Info aggiuntive']
-            }
-            try:
-                orders_collection.insert_one(order)
-                successful_orders.append(order_id)
-            except Exception as e:
-                print(f"Error uploading order {order_id}: {e}")
-                failed_orders.append((order_id, codice_articolo))
-        else:
-            failed_orders.append((order_id, codice_articolo))
-    
-    return successful_orders, failed_orders
-
-def display_report(successful_orders, failed_orders):
-    success_message = f"Successfully uploaded {len(successful_orders)} orders."
-    failure_message = f"Failed to upload {len(failed_orders)} orders."
-    
-    report = success_message + "\n\n" + failure_message + "\n\n"
-    if failed_orders:
-        report += "Failed orders (Order ID, Codice Articolo):\n"
-        for order in failed_orders:
-            report += f"{order[0]}, {order[1]}\n"
-    
-    QMessageBox.information(None, "Upload Report", report)
-
-def process_excel(self):
-    file_path, _ = QFileDialog.getOpenFileName(self, "Open Excel File", "", "Excel files (*.xlsx)")
-    if not file_path:
-        return
-
-    try:
-        excel_file = pd.ExcelFile(file_path)
-        articoli_df = excel_file.parse("Articoli")
-        ordini_df = excel_file.parse("Ordini")
-
-        # Step 1: Process Articoli
-        article_check, missing_families = process_articoli_sheet(articoli_df, self.db)
-        if missing_families:
-            QMessageBox.warning(self, "Missing Families", f"The following families are missing: {', '.join(missing_families)}")
-            return
-        
-        # Step 2: Process Ordini
-        successful_orders, failed_orders = process_ordini_sheet(ordini_df, article_check, self.db)
-        
-        # Step 3: Display report
-        display_report(successful_orders, failed_orders)
-
-    except Exception as e:
-        QMessageBox.critical(self, "Error", f"An error occurred: {e}")
-
-
-def create_json_for_flowchart(codice, phases, cycle_times, description, phaseTargetQueue):
-        element_ids = [str(ObjectId()) for _ in phases]
-        dashboard_elements = []
-        for i, (phase, time, phaseTargetQueue) in enumerate(zip(phases, cycle_times, phaseTargetQueue)):
-            element = {
-                "positionDx": 101.2 + 200 * i,
-                "positionDy": 240.2,
-                "size.width": 100.0, 
-                "size.height": 50.0,
-                "text": phase,
-                "phaseTargetQueue": phaseTargetQueue,
-                "textColor": 4278190080,
-                "fontFamily": None,
-                "textSize": 12.0,
-                "textIsBold": False,
-                "id": element_ids[i],
-                "kind": 0,
-                "handlers": [3, 2],
-                "handlerSize": 15.0,
-                "backgroundColor": 4294967295,
-                "borderColor": 4293336434,
-                "borderThickness": 3.0,
-                "elevation": 4.0,
-                "next": [],
-                "phaseDuration": int(time)
-            }
-            if i < len(phases) - 1:
-                element['next'].append({
-                    "destElementId": element_ids[i + 1],
-                    "arrowParams": {
-                        "thickness": 1.7,
-                        "headRadius": 6.0,
-                        "tailLength": 25.0,
-                        "color": 4278190080,
-                        "style": 0,
-                        "tension": 1.0,
-                        "startArrowPositionX": 1.0,
-                        "startArrowPositionY": 0.0,
-                        "endArrowPositionX": -1.0,
-                        "endArrowPositionY": 0.0
-                    },
-                    "pivots": []
-                })
-            dashboard_elements.append(element)
-        json_output = {
-            "_id": ObjectId(),
-            "titolo": codice,
-            "descrizione": description,
-            "image": "https://upload.wikimedia.org/wikipedia/commons/1/14/No_Image_Available.jpg",
-            "dashboard": {
-                "elements": dashboard_elements,
-                "dashboardSizeWidth": 1279.0,
-                "dashboardSizeHeight": 566.72,
-                "gridBackgroundParams": {
-                    "offset.dx": -580.4256299112267, 
-                    "offset.dy": -150.19796474249733,
-                    "scale": 1.0,
-                    "gridSquare": 20.0,
-                    "gridThickness": 0.7,
-                    "secondarySquareStep": 5,
-                    "backgroundColor": 4294967295,
-                    "gridColor": 520093696
-                },
-                "blockDefaultZoomGestures": False,
-                "minimumZoomFactor": 0.25,
-                "arrowStyle": 0
-            },
-            "catalogo": [{
-                "_id": ObjectId(),
-                "prodId": codice,  
-                "prodotto": codice, 
-                "descrizione": description,
-                "famiglia": codice,
-                "elements": [
-                    {
-                        "pId": element_ids[i],
-                        "property": "Example property", # Placeholder
-                        "duration": int(time)
-                    } for i, time in enumerate(cycle_times)
-                ]
-            }]
-        }
-        return json_output
-    
-
-def order_upload_to_mongodb(orders, db_url, db_name, collection_name):
-        db = client[db_name]
-        collection = db[collection_name]
-        result = collection.insert_many(orders)
-        print(f"Inserted Order IDs: {result.inserted_ids}")
+load_dotenv()  # Load environment variables from .env file
 
 def connect_to_mongodb(username, password):
     global client
@@ -237,6 +46,8 @@ def connect_to_mongodb(username, password):
             client = MongoClient(os.getenv("MARCOLIN_URI"))
         elif username == "demo" and password == "demo":
             client = MongoClient(os.getenv("DEMO_URI"))
+        elif username == "demoveloce" and password == "demoveloce":
+            client = MongoClient(os.getenv("DEMO_VELOCE_URI"))
         else:
             print("Invalid credentials")
             return False
@@ -245,110 +56,784 @@ def connect_to_mongodb(username, password):
     except Exception as e:
         print(f"Error connecting to MongoDB: {e}")
         return False
-    
-def trova_riga_per_id_legame(df, id_legame):
-    riga_trovata = df[df['ID legame'] == id_legame]
-    return riga_trovata
 
-def estrai_data_richiesta(df, id_legame):
-    riga = trova_riga_per_id_legame(df, id_legame)
-    if not riga.empty:
-        data_richiesta = riga['Data richiesta'].values[0]
-        return pd.to_datetime(data_richiesta)
-    return None
+# Getters from DB
+
+def fetch_settings():
+    global client
+    db = client['azienda']
+    collection = db['settings']
     
-def create_orders_objects(file_path):
-    # Load the data from Excel
-        dataOrders = pd.read_excel(file_path)
-        global queued_df
-        data = queued_df
-    # Define the columns to use
-        order_column = 'ID'
-        fasi_column = 'FaseOperativo'
-        tempo_ciclo_column = 'Tempo Ciclo'
-        codice_column = 'Codice'
-        quantita_column = 'Qta'
-        descrizione_column = 'Descrizione'
-        accessori_column = 'Accessori'
-        lead_time_column = 'LTFase'
-        deadline_column = 'Data richiesta'
+    # Fetch the settings document
+    settings = collection.find_one()
+    
+    if not settings:
+        raise ValueError("No settings document found")
+    
+    return settings
+
+def get_phase_end_times(phases, codiceArticolo):
+    # Initialize the list to store phase end times
+    end_times = []
+    
+    # Access the database and collection
+    process_db = client['process_db']
+    famiglie_di_prodotto = process_db['famiglie_di_prodotto']
+    
+    # Find the correct family document based on codiceArticolo
+    family = famiglie_di_prodotto.find_one({"catalogo.prodId": codiceArticolo})
+    
+    # If the family document is found
+    if family:
+        for phase in phases:
+            # Loop through each element in the family 'dashboard' to find the phase by name
+            for element in family.get('dashboard', {}).get('elements', []):
+                if element.get('text') == phase:
+                    # Get the phase duration
+                    phase_duration = element.get('phaseDuration', 0)
+                    
+                    # Check if phase_duration is a dictionary and has '$numberInt', else use it as-is
+                    if isinstance(phase_duration, dict):
+                        phase_duration = phase_duration.get('$numberInt', 0)
+                    
+                    end_times.append(int(phase_duration))
+                    break
+            else:
+                # If the phase is not found, append 0 as the duration
+                end_times.append(0)
+    else:
+        # If the family or article isn't found, return 0 for each phase
+        end_times = [0] * len(phases)
+    
+    return end_times
+
+def get_phase_queue_times(phases, codiceArticolo):
+    # Initialize the list to store phase end times
+    queue_times = []
+    
+    # Access the database and collection
+    process_db = client['process_db']
+    famiglie_di_prodotto = process_db['famiglie_di_prodotto']
+    
+    # Find the correct family document based on codiceArticolo
+    family = famiglie_di_prodotto.find_one({"catalogo.prodId": codiceArticolo})
+    
+    # If the family document is found
+    if family:
+        for phase in phases:
+            # Loop through each element in the family 'dashboard' to find the phase by name
+            for element in family.get('dashboard', {}).get('elements', []):
+                if element.get('text') == phase:
+                    # Get the phase duration
+                    phase_duration = element.get('phaseTargetQueue', 0)
+                    
+                    # Check if phase_duration is a dictionary and has '$numberInt', else use it as-is
+                    if isinstance(phase_duration, dict):
+                        phase_duration = phase_duration.get('$numberInt', 0)
+                    
+                    queue_times.append(int(phase_duration))
+                    break
+            else:
+                # If the phase is not found, append 0 as the duration
+                queue_times.append(0)
+    else:
+        # If the family or article isn't found, return 0 for each phase
+        queue_times = [0] * len(phases)
+    
+    return queue_times
+
+# Phase Calculation functions:
+
+def get_queue_times(phases, codiceArticolo):
+    process_db = client['process_db']
+    famiglie_di_prodotto = process_db['famiglie_di_prodotto']
+    
+    family = famiglie_di_prodotto.find_one({"catalogo.prodId": codiceArticolo})
+    queues = {}
+    
+    if family:
+        for phase in phases:
+            # Fetch queue time for each phase from the family dashboard
+            for element in family.get('dashboard', {}).get('elements', []):
+                if element.get('text') == phase:
+                    queues[phase] = int(element.get('phaseTargetQueue', 0))  
+                    break
+    return queues
+
+def get_phase_durations(phases, codiceArticolo):
+    process_db = client['process_db']
+    famiglie_di_prodotto = process_db['famiglie_di_prodotto']
+    
+    family = famiglie_di_prodotto.find_one({"catalogo.prodId": codiceArticolo})
+    durations = {}
+    
+    if family:
+        for phase in phases:
+            # Fetch duration time for each phase from the family dashboard
+            for element in family.get('dashboard', {}).get('elements', []):
+                if element.get('text') == phase:
+                    durations[phase] = int(element.get('phaseDuration', 0)) 
+                    break
+    return durations
+
+def fetch_flowchart_data(codiceArticolo):
+    global client
+    db = client['process_db']
+    collection = db['famiglie_di_prodotto']
+
+    # Fetch the family document from the collection
+    family = collection.find_one({"catalogo.prodId": codiceArticolo})
+
+    print('Found Family:', family['titolo'])
+    
+    if not family or 'dashboard' not in family:
+        raise ValueError("No valid dashboard found for the given family ID.")
+    
+    dashboard = family['dashboard']
+    graph = {}
+    reverse_graph = {}
+    durations = {}
+    queues = {}
+    indegree = {}
+
+    elements = dashboard.get('elements', [])
+    for node in elements:
+        node_id = node['id']
+        duration = node.get('phaseDuration', 0)
+        queue = node.get('phaseTargetQueue', duration)
+
+        # Initialize the node in the graph
+        durations[node_id] = duration
+        queues[node_id] = queue
+        graph[node_id] = []
+
+        # Ensure every node is initialized in the reverse_graph (even without incoming edges)
+        if node_id not in reverse_graph:
+            reverse_graph[node_id] = []
+
+        # Process connections (outgoing edges)
+        for next_node in node.get('next', []):
+            dest_id = next_node['destElementId']
+            graph[node_id].append(dest_id)
+
+            # Increment the indegree for reverse graph construction
+            indegree[dest_id] = indegree.get(dest_id, 0) + 1
+
+            # Add to reverse graph (dest_id -> node_id)
+            if dest_id not in reverse_graph:
+                reverse_graph[dest_id] = []
+            reverse_graph[dest_id].append(node_id)
+
+    # Debugging print statements to verify structures
+    print("Graph:", graph)
+    print("Reverse Graph:", reverse_graph)
+    print("Durations:", durations)
+    print("Queues:", queues)
+    print("Indegree:", indegree)
+
+    return graph, reverse_graph, durations, queues, indegree, dashboard
+
+def calculate_phase_dates(end_date, phases, quantity, settings, codiceArticolo):
+    
+    settings = fetch_settings()
+    
+    print('Calculating Phase Dates')
+    open_time = settings.get('orariAzienda', {}).get('inizio', {'ore': 8, 'minuti': 0})
+    close_time = settings.get('orariAzienda', {}).get('fine', {'ore': 18, 'minuti': 0})
+    holiday_list = settings.get('ferieAziendali', [])
+    pausa_pranzo = settings.get('pausaPranzo', {'inizio': {'ore': 12, 'minuti': 0}, 'fine': {'ore': 15, 'minuti': 0}})
+
+    print('Open Time:', open_time)
+    print('Close Time:', close_time)
+    print('Holiday Time:', holiday_list)
+    print('Pausa Time:', pausa_pranzo)
+    
+    phase_durations = get_phase_end_times(phases, codiceArticolo)
+    
+    print('Got Phase durations (Tempo ciclo):', phase_durations)
+    
+    entrata_coda_fase = []
+    
+    for i, phase in enumerate(phases):
+        # Calculate phase duration based on quantity
+        duration = phase_durations[i] * quantity
         
-        orders = []
-
-        unique_orders = {}
-    # Process the DataFrame
-        for index, row in dataOrders.iterrows():
-            order_id = row[order_column]
-
-            fasi = row[fasi_column]
-
-            tempo_ciclo = row[tempo_ciclo_column]
-            codice = row[codice_column]
-            quantita = row[quantita_column]
-            descrizione = str(row[accessori_column]) + " " + row[descrizione_column] if str(row[accessori_column]) != "nan" else row[descrizione_column]
-            lead_time_fase = row[lead_time_column]
-            orderDeadline = row[deadline_column] #row[deadline_column] #datetime.datetime.now() #estrai_data_richiesta(dataOrders, order_id)
-
-        # Create or update the order in the unique orders dict
-            if order_id not in unique_orders:
-                unique_orders[order_id] = {
-                    # chiave da eliminare per memorizzare i sabati e domeniche da saltare in seguito
-                    "count": 0,
-                    "_id": ObjectId(),  # Generate new MongoDB ObjectId
-                    "orderId": str(order_id),
-                    "orderInsertDate": datetime.datetime.now(),
-                    "codiceArticolo": codice,
-                    "orderDescription": descrizione,
-                    "quantita": quantita,
-                    "orderStatus": 0,
-                    "priority": 0,
-                    "inCodaAt": "",
-                    # DUPLICATO
-                    "orderDeadline": orderDeadline,
-                    "customerDeadline": orderDeadline,
-                    # DUPLICATO
-                    # questi due campi vengono settati alla deadline e poi per ogni fase
-                    # viene rimosso il lead time di ogni fase per capire quando l'ordine
-                    # entrerà in coda in ogni macchinario
-                    "orderStartDate": orderDeadline,
-                    "dataInizioLavorazioni": orderDeadline,
-                    "phase": [],
-                    "phaseStatus": [],
-                    "assignedOperator": [],
-                    "phaseLateMotivation": [],
-                    "phaseEndTime": [],
-                    "phaseRealTime": [],
-                    "entrataCodaFase": [],
-                }
-        # Append the current Fasi and its Tempo Ciclo to the order
-            unique_orders[order_id]['phase'].append([fasi])
-            unique_orders[order_id]['phaseStatus'].append([1]) # NO UFFICIO ACQUISTI
-            unique_orders[order_id]['assignedOperator'].append([""])
-            unique_orders[order_id]['phaseLateMotivation'].append(["none"])
-            unique_orders[order_id]['phaseEndTime'].append([tempo_ciclo] if fasi != "Zincatura" else [0])
-            unique_orders[order_id]['phaseRealTime'].append([0])
-
-            possible_date = unique_orders[order_id]['dataInizioLavorazioni'] - datetime.timedelta(days=lead_time_fase + unique_orders[order_id]['count'])
-            if possible_date.weekday() >= 5:
-                unique_orders[order_id]['count'] = unique_orders[order_id]['count'] + 1
-
-            unique_orders[order_id]['dataInizioLavorazioni'] = unique_orders[order_id]['dataInizioLavorazioni'] - datetime.timedelta(days=lead_time_fase + unique_orders[order_id]['count'])
-            unique_orders[order_id]['orderStartDate'] = unique_orders[order_id]['orderStartDate'] - datetime.timedelta(days=lead_time_fase + unique_orders[order_id]['count'])
-            # Entrata coda fase è il datetime che rappresenta quando una fase deve cominciare
-            # usando dataInizioLavorazioni in ogni iterazione so esattamente quando ogni fase
-            # deve cominciare, ma l'array dovrà essere rovesciato. Infatti, guardando l'excel,
-            # le fasi sono scritte in ordine dalla prima all'ultima
-            unique_orders[order_id]['entrataCodaFase'].append([unique_orders[order_id]['dataInizioLavorazioni']])
-
-        for ordine in unique_orders:
-            unique_orders[ordine]['entrataCodaFase'] = unique_orders[ordine]['entrataCodaFase'][::-1]
-            unique_orders[ordine].pop('count', None)
-
-    # Convert unique orders dictionary to a list for MongoDB insertion
-        orders.extend(unique_orders.values())
-
-        return orders    
+        graph, reverse_graph, durations, queues, indegree, dashboard = fetch_flowchart_data(codiceArticolo)
     
+        print('checking end_date type', type(end_date))
+        # Calculate start date for the phase, taking into account work hours, breaks, and holidays
+        start_date = find_start_date_of_phase(
+            end_date, 
+            phase, #target phase
+            quantity, 
+            open_time, 
+            close_time, 
+            holiday_list, 
+            pausa_pranzo, 
+            graph,
+            reverse_graph, 
+            queues, 
+            dashboard,
+            durations
+        )
+        print("Found start_date of equal to", phase, start_date)
+        
+        if start_date:
+            # Append the queue or cycle start date as a single-layer array
+            if start_date[0][0] < start_date[1][0]:
+                entrata_coda_fase.append(start_date[0][0])  # Queue start is earlier
+            else:
+                entrata_coda_fase.append(start_date[1][0])  # Cycle start is earlier
+        else:
+            # Default handling if None is returned
+            entrata_coda_fase.append(None)
+        
+        
+        
+        # Update end_date to the start date of the current phase for the next iteration
+        end_date = start_date[0][0] if start_date else end_date
+    
+    print('Entrata coda phase:', entrata_coda_fase)
+    return entrata_coda_fase
+
+def get_graph_layers_from_end(graph, reverse_graph):
+    local_reverse_graph = reverse_graph.copy()
+    layers = []
+    visited = set()
+    queue = []
+
+    # Identify all end nodes (nodes with no outgoing edges)
+    for node_id, edges in graph.items():
+        if not edges:
+            queue.append(node_id)
+            visited.add(node_id)
+
+    # Start from end nodes and traverse backwards
+    while queue:
+        current_layer = []
+        layer_size = len(queue)
+
+        for _ in range(layer_size):
+            node_id = queue.pop(0)
+            current_layer.append(node_id)
+
+            # Traverse to all nodes pointing to the current node (predecessors)
+            if node_id in local_reverse_graph:
+                for predecessor in local_reverse_graph[node_id]:
+                    if predecessor not in visited:
+                        queue.append(predecessor)
+                        visited.add(predecessor)
+
+        layers.insert(0, current_layer)
+
+    return layers
+
+def find_start_date_of_phase(end_date, target_phase, quantity, open_time, close_time, holiday_list, pausa_pranzo, graph, reverse_graph, queues, dashboard, durations, duration=-1):
+    """
+    Find the start date of a phase by traversing backwards from the end nodes.
+    """
+    print('Trying to find Start date of phase for', target_phase)
+    
+    # Create a mapping of phase names to node IDs
+    phase_name_to_id = {node['text']: node['id'] for node in dashboard.get('elements', [])}
+    
+    # Check if the target_phase exists in the mapping
+    if target_phase not in phase_name_to_id:
+        raise ValueError(f"Target phase '{target_phase}' not found in the dashboard.")
+    
+    # Get the node ID corresponding to the target phase
+    target_phase_id = phase_name_to_id[target_phase]
+    print(f"Target phase '{target_phase}' corresponds to node ID: {target_phase_id}")
+    
+    # Function to traverse the graph backwards from the end nodes to find the target phase
+    def traverse_backwards(current_id):
+        print(f"Traversing node: {current_id}, looking for target phase: {target_phase_id}")
+        if current_id == target_phase_id:
+            print(f"Found target phase: {current_id}")    
+            return [queues[current_id], duration if duration >= 0 else durations[current_id] * quantity]
+        
+        if current_id not in reverse_graph:
+            print('Target phase not in reverse_graph: returning None', current_id)
+            return None
+        
+        for prev_id in reverse_graph[current_id]:
+            print(f"Traversing to previous node: {prev_id}")
+            result = traverse_backwards(prev_id)
+            if result:
+                print(f"Found path from {current_id} to {prev_id}: {result}")
+                return [result[0] + queues[current_id], result[1] + (duration if duration >= 0 else durations[current_id] * quantity)]
+            
+        print(f"No valid path found for node: {current_id}")
+        return None
+
+    # Calculate time durations
+    pausa_duration = (datetime.timedelta(hours=pausa_pranzo['fine']['ore'], minutes=pausa_pranzo['fine']['minuti']) -
+                      datetime.timedelta(hours=pausa_pranzo['inizio']['ore'], minutes=pausa_pranzo['inizio']['minuti']))
+    
+    print('Found pausa_duration equal to', pausa_duration)
+    
+    minutes_in_day = (datetime.timedelta(hours=close_time['ore'], minutes=close_time['minuti']) -
+                      datetime.timedelta(hours=open_time['ore'], minutes=open_time['minuti']) -
+                      pausa_duration).total_seconds() / 60
+    
+    print('Found minutes_in_day equal to', minutes_in_day)
+    
+    print("Check the structure of reverse_graph ", reverse_graph)  
+    
+    end_nodes = [node_id for node_id, edges in graph.items() if not edges]
+    
+    print('End nodes: ', end_nodes)
+    
+    def adjust_to_work_hours(possible_date):
+        start_work = datetime.time(open_time['ore'], open_time['minuti'])
+        end_work = datetime.time(close_time['ore'], close_time['minuti'])
+        lunch_start = datetime.time(pausa_pranzo['inizio']['ore'], pausa_pranzo['inizio']['minuti'])
+        lunch_end = datetime.time(pausa_pranzo['fine']['ore'], pausa_pranzo['fine']['minuti'])
+        
+        print('Company Hours:')
+        print(start_work)
+        print(end_work)
+        print(lunch_start)
+        print(lunch_end)
+
+        # Check for holidays
+        if any(holiday['inizio'].date() <= possible_date.date() <= holiday['fine'].date() for holiday in holiday_list):
+            possible_date -= timedelta(days=1)
+            possible_date = possible_date.replace(hour=start_work.hour, minute=start_work.minute)
+            return adjust_to_work_hours(possible_date)
+
+        # Adjust time if before or after working hours
+        if possible_date.time() < start_work:
+            possible_date = possible_date.replace(hour=start_work.hour, minute=start_work.minute)
+        elif possible_date.time() > end_work:
+            possible_date = possible_date + timedelta(days=1)
+            possible_date = possible_date.replace(hour=start_work.hour, minute=start_work.minute)
+
+        # Adjust if within lunch break
+        if lunch_start <= possible_date.time() <= lunch_end:
+            possible_date = possible_date.replace(hour=lunch_end.hour, minute=lunch_end.minute)
+        
+        return possible_date
+
+    # Calculate time respecting working hours and holidays
+    def calculate_possible_date(total_minutes, end_date):
+        print('Calculating possible date')
+        possible_date = end_date - timedelta(days=total_minutes // minutes_in_day, minutes=total_minutes % minutes_in_day)
+        possible_date = adjust_to_work_hours(possible_date)
+        
+        # Check for weekends and holidays
+        while possible_date.weekday() in [5, 6]:  # Saturday (5) or Sunday (6)
+            possible_date -= timedelta(days=2)
+            possible_date = adjust_to_work_hours(possible_date)
+            
+        print('Possible date found: ', possible_date)
+        return possible_date
+
+    for end_node in end_nodes:
+        print("Trying to traverse_backwards")
+        total_minutes = traverse_backwards(end_node)
+        print('Finished traverse_backwards, total_minutes:', total_minutes)
+        if total_minutes:
+            possible_queue_date = calculate_possible_date(total_minutes[1], end_date)
+            possible_cycle_date = calculate_possible_date(total_minutes[0], end_date)
+            
+            print('Found possible_queue_date and possible_cycle_date', possible_queue_date, possible_cycle_date)
+
+            return [[possible_queue_date], [possible_cycle_date]]
+
+    return None
+
+# Utils
+
+def subtract_workdays(end_date, workdays, open_time, close_time, holiday_list):
+    """
+    Subtracts the given number of workdays from the end date, skipping weekends and holidays.
+    """
+    while workdays > 0:
+        end_date -= datetime.timedelta(days=1)
+        
+        # Skip weekends
+        if end_date.weekday() >= 5 or is_holiday(end_date, holiday_list):
+            continue
+
+        workdays -= 1
+
+    return end_date
+
+def is_holiday(date, holiday_list):
+    """
+    Check if the date falls on a holiday by comparing against the holiday_list.
+    """
+    # print('in holiday')
+    for holiday in holiday_list:
+        # print(f"Holiday data: {holiday}")  # Debug statement
+        # OLD CODE CAUSING ERRORS: 
+        # holiday_start = datetime.datetime.fromtimestamp(holiday['inizio']['$date']['$numberLong'] / 1000)
+        # holiday_end = datetime.datetime.fromtimestamp(holiday['fine']['$date']['$numberLong'] / 1000)
+        holiday_start = holiday['inizio']  # Assuming this is a datetime.datetime object
+        holiday_end = holiday['fine'] 
+        if holiday_start <= date <= holiday_end:
+            return True
+    return False
+
+
+# Orders
+
+def create_order_object(phases, articolo, quantity, order_id, end_date, order_description, settings):
+    # Calculate phase dates
+    print('Passing to calculate_phase_dates:')
+    print('end_date:', end_date)
+    print('phases:', phases)
+    print('quantity:', quantity)
+    print('settings:', settings)
+    print('articolo:', articolo)
+    phase_dates = calculate_phase_dates(end_date, phases, quantity, settings, articolo) #returns entrata coda fase
+    
+    # Check if phase_dates is sorted in increasing order
+    if phase_dates != sorted(phase_dates): 
+        # If not sorted (increasing order), reverse the array (because the starting date is at the end)
+        phase_dates.reverse()
+        print('Phase dates after sorting check:', phase_dates)
+
+    # Print or return phase_dates as needed
+    print("Phase dates (entrara coda fase) array:", phase_dates)
+    
+    filtered_dates = [date for date in phase_dates if date is not None]
+    # reduce to find the earliest date
+    if filtered_dates:
+        start_date = min(filtered_dates) # Earliest Date
+        print('Order Start Date is: ', start_date)
+    else:
+        start_date = None
+        print('Order Start Date could not be calculated')
+        
+    # Align order structure with Flutter
+    order_object = {
+        "orderId": str(order_id),
+        "orderInsertDate": datetime.datetime.now(),
+        "orderStartDate": start_date,  # Start date based on calculated phase dates ERA phase_dates[0]
+        "assignedOperator": [[""] for _ in phases],
+        "orderStatus": 0,  # Initial status
+        "orderDescription": order_description or '',
+        "codiceArticolo": articolo,
+        "orderDeadline": end_date,
+        "customerDeadline": end_date,
+        "quantita": int(quantity),
+        "phase": [[p] for p in phases],  # List of phases
+        "phaseStatus": [[1] for _ in phases],  # Default status
+        "phaseEndTime": [[et * quantity] for et in get_phase_end_times(phases, articolo)], 
+        "phaseLateMotivation": [["none"] for _ in phases],  # Default empty motivation
+        "phaseRealTime": [[0] for _ in phases],  # Default real-time
+        "entrataCodaFase": [[date] for date in phase_dates],  # Queue entry dates
+        "priority": 0,  # Default priority
+        "inCodaAt": [],  
+        "inLavorazioneAt": [[""] for _ in phases],
+    }
+    
+    return order_object
+
+
+
+def create_json_for_flowchart(codice, phases, cycle_times, queueTargetTimes, description):
+    """  Creates Family Json object 
+
+    Args:
+        codice (_type_): _description_
+        phases (_type_): _description_
+        cycle_times (_type_): _description_
+        description (_type_): _description_
+
+    Returns:
+        _type_: _description_
+    """
+    element_ids = [str(ObjectId()) for _ in phases]
+    dashboard_elements = []
+    for i, (phase, time, targetTime) in enumerate(zip(phases, cycle_times, queueTargetTimes)):
+        element = {
+            "positionDx": 101.2 + 200 * i,
+            "positionDy": 240.2,
+            "size.width": 100.0, 
+            "size.height": 50.0,
+            "text": phase,
+            "textColor": 4278190080,
+            "fontFamily": None,
+            "textSize": 12.0,
+            "textIsBold": False,
+            "id": element_ids[i],
+            "kind": 0,
+            "handlers": [3, 2],
+            "handlerSize": 15.0,
+            "backgroundColor": 4294967295,
+            "borderColor": 4293336434,
+            "borderThickness": 3.0,
+            "elevation": 4.0,
+            "next": [],
+            "phaseDuration": int(time),
+            "phaseTargetQueue": targetTime
+        }
+        if i < len(phases) - 1:
+            element['next'].append({
+                "destElementId": element_ids[i + 1],
+                "arrowParams": {
+                    "thickness": 1.7,
+                    "headRadius": 6.0,
+                    "tailLength": 25.0,
+                    "color": 4278190080,
+                    "style": 0,
+                    "tension": 1.0,
+                    "startArrowPositionX": 1.0,
+                    "startArrowPositionY": 0.0,
+                    "endArrowPositionX": -1.0,
+                    "endArrowPositionY": 0.0
+                },
+                "pivots": []
+            })
+        dashboard_elements.append(element)
+    json_output = {
+        "_id": ObjectId(),
+        "titolo": codice,
+        "descrizione": description,
+        "image": "https://upload.wikimedia.org/wikipedia/commons/1/14/No_Image_Available.jpg",
+        "dashboard": {
+            "elements": dashboard_elements,
+            "dashboardSizeWidth": 1279.0,
+            "dashboardSizeHeight": 566.72,
+            "gridBackgroundParams": {
+                "offset.dx": -580.4256299112267, 
+                "offset.dy": -150.19796474249733,
+                "scale": 1.0,
+                "gridSquare": 20.0,
+                "gridThickness": 0.7,
+                "secondarySquareStep": 5,
+                "backgroundColor": 4294967295,
+                "gridColor": 520093696
+            },
+            "blockDefaultZoomGestures": False,
+            "minimumZoomFactor": 0.25,
+            "arrowStyle": 0
+        },
+        "catalogo": [{
+            "_id": ObjectId(),
+            "prodId": codice,  
+            "prodotto": codice, 
+            "descrizione": description,
+            "famiglia": codice,
+            "elements": [
+                {
+                    "pId": element_ids[i],
+                    "property": "Example property", # Placeholder
+                    "duration": int(time)
+                } for i, time in enumerate(cycle_times)
+            ]
+        }]
+    }
+    return json_output
+    
+
+def excel_date_parser(date_str):
+    return pd.to_datetime(date_str, dayfirst=True, errors='coerce')
+        
+def upload_orders_from_xlsx_amade(self):
+    # Fetch necessary data from MongoDB
+    db = client
+    collection_famiglie = db['process_db']['famiglie_di_prodotto']
+    collection_orders = db['orders_db']['ordini']
+    
+    # Open file dialog to select Excel file
+    file_path, _ = QFileDialog.getOpenFileName(self, "Open Excel File", "", "Excel files (*.xlsx)")
+    if not file_path:
+        QMessageBox.warning(self, "File Selection", "No file selected.")
+        return
+
+    if not file_path.endswith('.xlsx'):
+        QMessageBox.critical(self, "File Error", "The selected file is not an Excel file.")
+        return
+    
+    # Fetch existing order IDs from the 'ordini' collection
+    existing_order_ids = set()
+    
+    skipped_orders = []
+
+    order_cursor = collection_orders.find({}, {'orderId': 1})
+    for order in order_cursor:
+        existing_order_ids.add(order['orderId'])
+
+    try:
+        # Read the Excel file
+        xls = pd.ExcelFile(file_path)
+        orders_df = pd.read_excel(
+            xls,
+            sheet_name='Ordini',
+            dtype={'Id Ordine': str, 'Codice Articolo': str, 'Info aggiuntive': str},
+            parse_dates=['Data Richiesta'],
+            date_parser=excel_date_parser
+
+        )
+    except Exception as e:
+        QMessageBox.critical(self, "File Error", f"Failed to read the Excel file: {e}")
+        return
+
+    # Check if required columns are present
+    required_columns = {'Id Ordine', 'Codice Articolo', 'QTA', 'Data Richiesta', 'Info aggiuntive'}
+    if not required_columns.issubset(orders_df.columns):
+        missing_columns = required_columns - set(orders_df.columns)
+        QMessageBox.critical(self, "File Error", "Missing required columns: " + ", ".join(missing_columns))
+        return
+
+    # Drop rows where 'Codice Articolo' is NaN
+    orders_df = orders_df.dropna(subset=['Codice Articolo'])
+
+    # Initialize counters and lists for reporting
+    successful_orders = []
+    failed_orders = []
+
+    
+
+    # Create a dictionary to map 'prodId' to catalog item and family information
+    famiglia_cursor = collection_famiglie.find({}, {'catalogo': 1, 'dashboard': 1})
+    prodId_to_catalog_info = {}
+    for famiglia in famiglia_cursor:
+        catalogo = famiglia.get('catalogo', [])
+        phases_elements = famiglia.get('dashboard', {}).get('elements', [])
+        phase_names = [element.get('text', '') for element in phases_elements]
+        for item in catalogo:
+            prodId_to_catalog_info[item['prodId']] = {
+                'catalog_item': item,
+                'phases': phase_names,
+                'family': famiglia
+            }
+            
+    settings = fetch_settings() 
+    print('got settings')
+
+    # Process each order
+    for idx, row in orders_df.iterrows():
+        ordineId = row['Id Ordine']
+        codiceArticolo = row['Codice Articolo']
+        qta = row['QTA']
+        dataRichiesta = row['Data Richiesta']
+        infoAggiuntive = row['Info aggiuntive']
+
+        if ordineId in existing_order_ids:
+            skipped_orders.append(ordineId)
+            continue  # Skip processing this order
+        
+        print('Trying to check data Rcihesta')
+        # Validate dataRichiesta
+        if pd.isnull(dataRichiesta):
+            failed_orders.append({'ordineId': ordineId, 'codiceArticolo': codiceArticolo, 'reason': 'Data Richiesta is null'})
+            continue
+
+        if not isinstance(dataRichiesta, datetime.datetime):
+            try:
+                # Try to parse the date
+                dataRichiesta = pd.to_datetime(dataRichiesta, dayfirst=True)
+            except Exception as e:
+                failed_orders.append({'ordineId': ordineId, 'codiceArticolo': codiceArticolo, 'reason': f'Invalid date: {dataRichiesta}'})
+                continue
+
+        print('Data Rcihesta is good: ', dataRichiesta)
+        
+        # Check if the 'codiceArticolo' exists in 'catalogo'
+        catalog_info = prodId_to_catalog_info.get(codiceArticolo)
+        if not catalog_info:
+            failed_orders.append({'ordineId': ordineId, 'codiceArticolo': codiceArticolo, 'reason': f'No document found with prodId {codiceArticolo}'})
+            continue
+
+        catalog_item = catalog_info['catalog_item']
+        phases = catalog_info['phases']
+        articolo = catalog_item  
+        quantity = qta
+        order_id = ordineId
+        end_date = dataRichiesta
+        order_description = infoAggiuntive
+
+        print('Trying to create order object')
+        # Create the order object using the provided function
+        try:
+            order_document = create_order_object(
+                phases=phases,
+                articolo=codiceArticolo,
+                quantity=quantity,
+                order_id=order_id,
+                end_date=end_date,
+                order_description=order_description,
+                settings=settings
+            )
+        except Exception as e:
+            failed_orders.append({'ordineId': ordineId, 'codiceArticolo': codiceArticolo, 'reason': f'Error creating order object: {e}'})
+            continue
+        print('Order object created')
+
+        # Insert the order into the 'orders' collection
+        try:
+            collection_orders.insert_one(order_document)
+            successful_orders.append(ordineId)
+        except Exception as e:
+            failed_orders.append({'ordineId': ordineId, 'codiceArticolo': codiceArticolo, 'reason': str(e)})
+
+    summary_message = f"{len(successful_orders)} orders processed successfully, {len(failed_orders)} errors, {len(skipped_orders)} orders skipped (already in database)."
+
+     # Create the report content
+    report_message = "Orders Upload Report:\n\n"
+    report_message += summary_message + "\n\n"
+
+    if successful_orders:
+        report_message += "Successfully processed orders:\n"
+        report_message += "\n".join(successful_orders) + "\n\n"
+
+    if failed_orders:
+        report_message += "Errors encountered:\n"
+        for error in failed_orders:
+            error_detail = f"{error.get('ordineId', error.get('codiceArticolo'))}: {error['reason']}"
+            report_message += error_detail + "\n"
+
+    # Show a report of the upload process
+    show_upload_report(successful_orders, failed_orders, skipped_orders)
+
+# Reporting Functions
+
+def show_upload_report(successful_orders, failed_orders, skipped_orders):
+    report_message = "Upload Report:\n\n"
+
+    if successful_orders:
+        report_message += "Successfully uploaded orders:\n"
+        report_message += "\n".join([str(order) for order in successful_orders])
+        report_message += "\n\n"
+
+    if failed_orders:
+        report_message += "Failed to upload orders:\n"
+        for failed in failed_orders:
+            codice_articolo = failed.get('codiceArticolo', 'Unknown')
+            report_message += f"Order ID: {failed['ordineId']}, Codice Articolo: {codice_articolo}, Reason: {failed['reason']}\n"
+            
+    if skipped_orders:
+        report_message += "Skipped orders (already in database):\n"
+        report_message += "\n".join(skipped_orders) + "\n\n"
+
+    # Show the message in a popup dialog
+    QMessageBox.information(None, "Upload Report", report_message)
+    
+    save_report_to_file(report_message, "orders")
+
+def save_report_to_file(report_content, report_type):
+    if not os.path.exists('./reports'):
+        os.makedirs('./reports')
+
+    # Generate a timestamped filename
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"{report_type}_report_{timestamp}.txt"
+    file_path = os.path.join('reports', filename)
+
+    # Write the report content to the file
+    try:
+        with open(file_path, 'w', encoding='utf-8') as file:
+            file.write(report_content)
+        print(f"Report saved to {file_path}")
+    except Exception as e:
+        print(f"Failed to save report: {e}")
+        
+        
 
 class LoginWindow(QDialog):
     def __init__(self, parent=None):
@@ -357,7 +842,7 @@ class LoginWindow(QDialog):
         self.user_role = None  
         self.setWindowTitle("Login")
         self.setFixedSize(800, 600)
-
+        
         layout = QVBoxLayout()
 
         # Add company logo
@@ -365,7 +850,6 @@ class LoginWindow(QDialog):
         self.pixmap = QPixmap(r".\img\OPERATIVO_L_Main_Color.png")
         self.logo_label.setPixmap(self.pixmap.scaled(1200, 300, Qt.KeepAspectRatio))
         layout.addWidget(self.logo_label, alignment=Qt.AlignCenter)
-
 
         # Username and Password fields
         self.username_label = QLabel("Username:", self)
@@ -400,19 +884,9 @@ class LoginWindow(QDialog):
         username = self.username_input.text()
         password = self.password_input.text()
         if connect_to_mongodb(username, password):
-            self.user_role = get_user_role(username)
             self.accept()
         else:
             QMessageBox.critical(self, "Login Failed", "Invalid username or password")
-            
-def get_user_role(username):
-    # This is a placeholder function. You should implement the actual logic to retrieve the user role
-    # For demonstration:
-    if username == "marcolin":
-        return "marcolin_role"
-    else:
-        return "regular_role"
-    
 
 class MainWindow(QMainWindow):
     def __init__(self, user_role):
@@ -420,48 +894,38 @@ class MainWindow(QMainWindow):
         self.user_role = user_role
         self.setWindowTitle("Data Uploader")
         self.setGeometry(75, 75, window_width, window_height)
-
+        
+        self.qr_save_path = "./QRs" 
+        
         self.central_widget = QWidget()
         self.setCentralWidget(self.central_widget)
         self.layout = QVBoxLayout(self.central_widget)
 
         self.adjust_sizes()
 
-        self.logo_layout = QHBoxLayout()
-
-            
-        self.qr_save_path = "./QRs" 
         # Add company logo
         self.logo_label = QLabel(self)
         self.pixmap = QPixmap(r".\img\OPERATIVO_L_Main_Color.png")
         self.logo_label.setPixmap(self.pixmap.scaled(2400, 600, Qt.KeepAspectRatio))
-        self.logo_layout.addWidget(self.logo_label, alignment=Qt.AlignCenter)
-
-        # Add new logo
-        self.new_logo_label = QLabel(self)
-        self.new_pixmap = QPixmap(r"\img\marcolin_logo.png")  # Adjust the path as necessary
-        self.new_logo_label.setPixmap(self.new_pixmap.scaled(2400, 600, Qt.KeepAspectRatio))  # Adjust size as needed
-        self.logo_layout.addWidget(self.new_logo_label, alignment=Qt.AlignCenter)
-
-        # Add the logo layout to the main layout
-        self.layout.addLayout(self.logo_layout)
+        self.layout.addWidget(self.logo_label, alignment=Qt.AlignCenter)
 
         # Buttons
         # self.queue_button = QPushButton("Queue Data")
         # self.clear_button = QPushButton("Clear Queued Data")
         # self.upload_button = QPushButton("Upload Queued Data")
         # self.upload_button.setStyleSheet("background-color: green; color: white;")
-        self.wipe_button = QPushButton("Wipe Flussi Database")
+        self.upload_orders_button_amade = QPushButton("Upload Orders")
+        self.upload_famiglie_button = QPushButton("Upload Flussi (Famiglie)")
+        self.upload_famiglie_button.setStyleSheet("background-color: red; color: white;")
         self.export_button = QPushButton("Export Data")
-        self.family_upload_button = QPushButton("Upload Famiglie (Flussi)")
         self.utenti_qr_code_button = QPushButton("Generate Operatori QR Codes")
-        self.order_qr_code_button = QPushButton("Generate Orders QR Codes")
-        self.upload_orders_button = QPushButton("Upload Orders")
-
+        self.order_qr_button = QPushButton("Generate Order QR Codes")
+        self.upload_articoli_button = QPushButton("Upload Articoli")  
 
         # Setup font
         font = QFont("Proxima Nova", 12)
-        for button in [self.wipe_button, self.export_button, self.family_upload_button, self.order_qr_code_button, self.utenti_qr_code_button, self.upload_orders_button]:
+        for button in [self.upload_famiglie_button, self.export_button, self.upload_orders_button_amade, self.upload_famiglie_button, 
+                       self.export_button, self.utenti_qr_code_button, self.upload_articoli_button]:
             button.setFont(font)
             button.setFixedSize(350, 50)
 
@@ -474,44 +938,58 @@ class MainWindow(QMainWindow):
         # Add buttons to layouts
         # center_layout.addWidget(self.queue_button)
         # center_layout.addWidget(self.clear_button)
-
         # center_layout.addWidget(self.upload_button)
-
-        center_layout.addWidget(self.wipe_button)
+        center_layout.addWidget(self.upload_famiglie_button)
         center_layout.addWidget(self.export_button)
-        center_layout.addWidget(self.family_upload_button)
+        center_layout.addWidget(self.upload_orders_button_amade)
         center_layout.addWidget(self.utenti_qr_code_button)
-        center_layout.addWidget(self.order_qr_code_button)
-        center_layout.addWidget(self.upload_orders_button)
-        
+        center_layout.addWidget(self.order_qr_button)
+        center_layout.addWidget(self.upload_articoli_button)  
+
+
         # Add stretches to center the center layout
         main_horizontal_layout.addLayout(left_layout)
         main_horizontal_layout.addLayout(center_layout)
         main_horizontal_layout.addLayout(right_layout)
-
         self.layout.addLayout(main_horizontal_layout)
         
-        # Special Styling
-        self.wipe_button.setStyleSheet("background-color: red; color: white;") # RED WIPE BUTTON
-        self.upload_orders_button.setStyleSheet("background-color: blue; color: white;") # BLUE UPLOAD BUTTON
-        
-        
-        # BUTTON CONNECTIVITY TO FUNCTIONS
+        # BUTTON CONNECTIONS TO FUNCTIONS
         
         # self.queue_button.clicked.connect(self.queue_data)
         # self.clear_button.clicked.connect(self.clear_data)
         # self.upload_button.clicked.connect(self.upload_queued_data)
-        self.wipe_button.clicked.connect(self.wipe_database)
+        self.upload_famiglie_button.clicked.connect(self.marcolin_import_famiglie)
         self.export_button.clicked.connect(self.select_database_and_collection)
-        self.family_upload_button.clicked.connect(self.marcolin_import_famiglie)
         self.utenti_qr_code_button.clicked.connect(self.generate_and_save_qr_codes)
-        self.order_qr_code_button.clicked.connect(self.generate_order_qr_codes)
-        self.upload_orders_button.clicked.connect(self.upload_orders_data)
-
-        # Table for CSV data REDUNDANT - TO REMOVE
+        self.order_qr_button.clicked.connect(self.generate_order_qr_codes)
+        self.upload_orders_button_amade.clicked.connect(self.upload_orders_amade)
+        self.upload_articoli_button.clicked.connect(self.upload_articoli)
+        
+        # Table for CSV data - REDUNDANT TO BE REMOVED
         self.table = QTableWidget()
         self.layout.addWidget(self.table)
         
+    def initialize_ui(self):
+        if self.user_role == "special_role":
+            self.setup_special_user_ui()
+        else:
+            self.setup_regular_user_ui()
+        
+    def adjust_sizes(self):
+        screen = QApplication.primaryScreen().geometry()
+        self.screen_width = screen.width()
+        self.screen_height = screen.height()
+
+        # Set window size to 50% of the screen size
+        self.window_width = floor(self.screen_width * 0.5)
+        self.window_height = floor(self.screen_height * 0.5)
+        self.resize(self.window_width, self.window_height)
+
+        # Set image size to 30% of the window size
+        self.image_width = self.window_width * 0.3
+        self.image_height = self.window_height * 0.3
+
+
     def generate_and_save_qr_codes(self):
         if not os.path.exists(self.qr_save_path):
             os.makedirs(self.qr_save_path)
@@ -521,10 +999,10 @@ class MainWindow(QMainWindow):
             for document in collection.find():
                 name = document.get('nome', 'UnknownName')
                 surname = document.get('cognome', 'UnknownSurname')
-                password = document.get('password', 'NoPassword') 
-                qr_data = f"{name}||{surname}||{password}"  # Format the data as required by the new QR code system
+                password = document.get('password', 'NoPassword')  
+                qr_data = f"{name}||{surname}||{password}"  
                 filename = f"{name}_{surname}.png"
-                self.generate_qr(qr_data, filename, name, surname)  # Pass the name and surname to the QR generation function
+                self.generate_qr(qr_data, filename, name, surname)  
             QMessageBox.information(self, "QR Codes Generated", "QR codes have been successfully generated and saved in " + self.qr_save_path)
         except Exception as e:
             QMessageBox.critical(self, "Operation Failed", f"Failed to generate QR codes: {e}")
@@ -544,7 +1022,7 @@ class MainWindow(QMainWindow):
         img = img.convert("RGB")
 
         # Define font and get a drawing context
-        font = ImageFont.load_default()  # You can specify a different font here
+        font = ImageFont.load_default() 
         draw = ImageDraw.Draw(img)
 
         # Text to add
@@ -600,7 +1078,7 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "QR Codes Generated", f"Order QR codes have been successfully generated and saved in {folder}")
         except Exception as e:
             QMessageBox.critical(self, "Operation Failed", f"Failed to generate order QR codes: {e}")
-        
+
     def generate_order_qr_with_text(self, data, full_path, order_id, codice_articolo, quantita):
         qr = qrcode.QRCode(
             version=1,
@@ -641,100 +1119,6 @@ class MainWindow(QMainWindow):
 
         # Save the image
         new_img.save(full_path)
-    
-    def initialize_ui(self):
-        # Common setup code here
-
-        # Now, apply user-specific configurations:
-        if self.user_role == "special_role":
-            self.setup_special_user_ui()
-        else:
-            self.setup_regular_user_ui()
-        
-    def adjust_sizes(self):
-        screen = QApplication.primaryScreen().geometry()
-        self.screen_width = screen.width()
-        self.screen_height = screen.height()
-
-        # Set window size to 50% of the screen size
-        self.window_width = floor(self.screen_width * 0.5)
-        self.window_height = floor(self.screen_height * 0.5)
-        self.resize(self.window_width, self.window_height)
-
-        # Set image size to 30% of the window size
-        self.image_width = self.window_width * 0.3
-        self.image_height = self.window_height * 0.3
-
-    def queue_data(self):
-        global queued_df
-        filename, _ = QFileDialog.getOpenFileName(self, "Open CSV", "", "CSV files (*.csv)")
-        if filename:
-            queued_df = pd.read_csv(filename)
-            self.display_data()
-
-    def display_data(self):
-        self.table.clear()
-        if not queued_df.empty:
-            self.table.setRowCount(queued_df.shape[0])
-            self.table.setColumnCount(queued_df.shape[1])
-            self.table.setHorizontalHeaderLabels(queued_df.columns)
-            for i in range(queued_df.shape[0]):
-                for j in range(queued_df.shape[1]):
-                    self.table.setItem(i, j, QTableWidgetItem(str(queued_df.iat[i, j])))
-                    
-    def upload_orders_data(self):
-    # Step 1: Load the Excel file
-        filename, _ = QFileDialog.getOpenFileName(self, "Open Excel File", "", "Excel files (*.xlsx)")
-
-        if not filename:
-            return  # Exit if no file is selected
-
-        try:
-            global client
-            # Step 2: Load the Excel file and parse the "Articoli" and "Ordini" sheets
-            excel_file = pd.ExcelFile(filename)
-            articoli_df = excel_file.parse("Articoli")
-            ordini_df = excel_file.parse("Ordini")
-
-            # Step 3: Process the "Articoli" sheet to check families and products in the database
-            article_check, missing_families = process_articoli_sheet(articoli_df, client["process_db"])
-
-            # If there are missing families, inform the user and stop the process
-            if missing_families:
-                QMessageBox.warning(self, "Missing Families", f"The following families are missing: {', '.join(missing_families)}")
-                return
-
-            # Step 4: Process the "Ordini" sheet and attempt to upload orders to MongoDB
-            successful_orders, failed_orders = process_ordini_sheet(ordini_df, article_check, client["orders_db"])
-
-            # Step 5: Display the final report (successful and failed uploads)
-            display_report(successful_orders, failed_orders)
-
-        except Exception as e:
-            # Handle any errors during the process and show a message to the user
-            QMessageBox.critical(self, "Error", f"Failed to process orders: {e}")
-
-                
-    def upload_queued_data(self):
-        global queued_df
-        print("Attempting to upload data...")
-        if not queued_df.empty:
-            reply = QMessageBox.question(self, "Confirm Upload", "Are you sure you want to upload the queued data?",
-                                         QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
-            if reply == QMessageBox.Yes:
-                try:
-                    data_to_upload = queued_df.to_dict('records')
-                    db = client['processes_db']
-                    collection = db['macchinari']
-                    collection.insert_many(data_to_upload)
-                    QMessageBox.information(self, "Upload Complete", "Data has been successfully uploaded.")
-                    self.clear_data()
-                except Exception as e:
-                    print(f"Error uploading data: {e}")
-                    QMessageBox.critical(self, "Upload Failed", f"Failed to upload data: {e}")
-
-    def clear_data(self):
-        self.table.clear()
 
     def init_placeholder(self):
         self.table.setRowCount(1)
@@ -747,17 +1131,88 @@ class MainWindow(QMainWindow):
                                      QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
         if reply == QMessageBox.Yes:
             try:
-                db = client['process_db']
-                collection = db['famiglie_di_prodotto']
-                
-                print("Deleting documents in the collection...")
-                result = collection.delete_many({})
-                print(f"Deleted {result.deleted_count} documents.")
+                db = client['processes_db']
+                collection = db['macchinari']
+                collection.delete_many({})
                 self.clear_data()
                 QMessageBox.information(self, "Success", "The database has been wiped.")
             except Exception as e:
                 print(f"Error wiping database: {e}")
                 QMessageBox.critical(self, "Wipe Failed", f"Failed to wipe database: {e}")
+                
+    
+    # today
+
+    def upload_orders_amade(self):
+        # filename, _ = QFileDialog.getOpenFileName(self, "Open XLSX File", "", "Excel files (*.xlsx)")
+        # if filename:
+             upload_orders_from_xlsx_amade(self)
+        #     QMessageBox.information(self, "Upload Complete", "Order upload process completed.")
+        # else:
+        #     QMessageBox.warning(self, "No File Selected", "Please select an Excel file to upload.")
+    
+    def marcolin_import_famiglie(self):
+        # Prompt the user to select an Excel file
+        file_path, _ = QFileDialog.getOpenFileName(self, "Open Excel File", "", "Excel files (*.xlsx)")
+        if not file_path:
+            QMessageBox.warning(self, "File Selection", "No file selected.")
+            return
+
+        if not file_path.endswith('.xlsx'):
+            QMessageBox.critical(self, "File Error", "The selected file is not an Excel file.")
+            return
+
+        try:
+            # Reading the Excel file
+            df = pd.read_excel(file_path, sheet_name='Famiglie')
+        except Exception as e:
+            QMessageBox.critical(self, "File Error", f"Failed to read the Excel file: {e}")
+            return
+
+        # Check if required columns are present in the DataFrame
+        required_columns = {'Codice', 'FaseOperativo', 'LTFase', 'Tempo Ciclo', 'Descrizione', 'Accessori'}
+        if not required_columns.issubset(df.columns):
+            missing_columns = required_columns - set(df.columns)
+            QMessageBox.critical(self, "File Error", "Missing required columns: " + ", ".join(missing_columns))
+            return
+
+        output_directory = './output_jsons'
+
+        db_name = 'process_db'
+        collection_name = 'famiglie_di_prodotto'
+        db = client[db_name]
+        collection = db[collection_name]
+
+        print("Processing data...")
+        success_count = 0
+        error_count = 0
+        errors = []
+        for codice, group in df.groupby('Codice'):
+            try:
+                fasi = group['FaseOperativo'].tolist()
+                lt_fase = group['LTFase'].tolist()
+                tempo_ciclo = group['Tempo Ciclo'].tolist()
+                description = group['Descrizione'].iloc[0] + " " + " ".join(group['Accessori'].dropna().unique())
+
+                print(f"Creating and uploading JSON for Codice: {codice}")
+                json_object = create_json_for_flowchart(codice, fasi, tempo_ciclo, lt_fase, description)
+
+                # Upload JSON object directly to MongoDB
+                collection.insert_one(json_object)
+                print(f"Uploaded JSON for Codice: {codice} to MongoDB")
+                success_count += 1
+            except Exception as e:
+                print(f"Error encountered with family {codice}: {e}")
+                errors.append(codice)
+                error_count += 1
+
+        summary_message = f"{success_count} families uploaded successfully, {error_count} failed: {', '.join(errors)}"
+        QMessageBox.information(self, "Upload Summary", summary_message)
+
+        # TESTING: 
+        # print("Exporting data to Excel...")
+        # output_df = pd.DataFrame(processed_data)
+        # output_df.to_excel(os.path.join(output_directory, 'formatted_output.xlsx'), index=False)
 
     def select_database_and_collection(self):
         databases = client.list_database_names()
@@ -824,7 +1279,7 @@ class MainWindow(QMainWindow):
             print(f"Error exporting data: {e}")
             QMessageBox.critical(self, "Export Failed", f"Failed to export data: {e}")
             
-    def marcolin_import_famiglie(self):
+    def upload_articoli(self):
         file_path, _ = QFileDialog.getOpenFileName(self, "Open Excel File", "", "Excel files (*.xlsx)")
         if not file_path:
             QMessageBox.warning(self, "File Selection", "No file selected.")
@@ -835,68 +1290,119 @@ class MainWindow(QMainWindow):
             return
 
         try:
-            df = pd.read_excel(file_path)
+            # Read the Excel file
+            xls = pd.ExcelFile(file_path)
+            articoli_df = pd.read_excel(xls, sheet_name='Articoli')
         except Exception as e:
             QMessageBox.critical(self, "File Error", f"Failed to read the Excel file: {e}")
             return
 
-        required_columns = {'Codice', 'FaseOperativo', 'LTFase', 'Tempo Ciclo', 'Qta', 'Descrizione', 'Accessori'}
-        if not required_columns.issubset(df.columns):
-            missing_columns = required_columns - set(df.columns)
+        # Check if required columns are present
+        required_columns = {'Codice Articolo', 'Descrizione articolo', 'Famiglia di prodotto', 'Fase Operativo', 'Tempo Ciclo', 'Info lavorazione'}
+        if not required_columns.issubset(articoli_df.columns):
+            missing_columns = required_columns - set(articoli_df.columns)
             QMessageBox.critical(self, "File Error", "Missing required columns: " + ", ".join(missing_columns))
             return
 
-        output_directory = './output_jsons'
-        
-        db_name = 'process_db'
-        collection_name = 'famiglie_di_prodotto'
-        db = client[db_name]
-        collection = db[collection_name]
+        # Fetch all families from MongoDB
+        db = client['process_db']
+        collection = db['famiglie_di_prodotto']
+        families = list(collection.find())
+        # Create a dictionary for quick lookup
+        family_dict = {}
+        for family in families:
+            family_dict[family['titolo']] = family
 
-        print("Reading the Excel file...")
-        df = pd.read_excel(file_path)
-
-        processed_data = {
-            'Codice': [],
-            'Fasi': [],
-            'LT Fase Array': [],
-            'Tempo Ciclo Array': [],
-            'QTA': [],
-            'Description': [],
-        }
-
-        print("Processing data...")
+        # Initialize counters
         success_count = 0
         error_count = 0
         errors = []
-        for codice, group in df.groupby('Codice'):
+        processed_articoli = []
+
+
+        # Process each row in articoli_df
+        for idx, row in articoli_df.iterrows():
+            codice_articolo = row['Codice Articolo']
+            descrizione_articolo = row['Descrizione articolo']
+            famiglia_di_prodotto = row['Famiglia di prodotto']
+            fase_operativo = row['Fase Operativo']
+            tempo_ciclo = row['Tempo Ciclo']
+            info_lavorazione = row['Info lavorazione']
+
+             # Find the family in the database
+            if famiglia_di_prodotto not in family_dict:
+                error_message = f'Famiglia di prodotto "{famiglia_di_prodotto}" not found in database.'
+                errors.append({'Codice Articolo': codice_articolo, 'Reason': error_message})
+                error_count += 1
+                continue
+
+            family = family_dict[famiglia_di_prodotto]
+
+            # Check if 'codice_articolo' is already in 'catalogo'
+            catalogo = family.get('catalogo', [])
+            if any(item['prodId'] == codice_articolo for item in catalogo):
+                # Article already exists in catalogo
+                continue
+
+            # Create 'elements' array
+            # For simplicity, create empty dictionaries, or match with family's dashboard elements
+            dashboard_elements = family.get('dashboard', {}).get('elements', [])
+            elements = [{} for _ in dashboard_elements]
+
+            # Create the new catalog item
+            catalog_item = {
+                "_id": ObjectId(),
+                "prodId": codice_articolo,
+                "prodotto": descrizione_articolo,
+                "descrizione": "",  
+                "famiglia": famiglia_di_prodotto,
+                "elements": elements
+            }
+
+            # Add the new catalog item to 'catalogo'
+            catalogo.append(catalog_item)
+
+            # Update the family in the dictionary
+            family['catalogo'] = catalogo
+            family_dict[famiglia_di_prodotto] = family
+
+            processed_articoli.append(codice_articolo)
+            success_count += 1
+
+        # After processing all articles, update the database with the modified families
+        for famiglia, family in family_dict.items():
+            # Update the family document in the database
             try:
-                fasi = group['FaseOperativo'].tolist()
-                lt_fase = group['LTFase'].tolist()
-                tempo_ciclo = group['Tempo Ciclo'].tolist()
-                qta = group['Qta'].iloc[0]
-                description = group['Descrizione'].iloc[0] + " " + " ".join(map(str, group['Accessori'].dropna().unique()))
-
-                print(f"Creating and uploading JSON for Codice: {codice}")
-                json_object = create_json_for_flowchart(codice, fasi, tempo_ciclo, description, lt_fase)
-
-                processed_data['Codice'].append(codice)
-                processed_data['Fasi'].append(fasi)
-                processed_data['LT Fase Array'].append(lt_fase)
-                processed_data['Tempo Ciclo Array'].append(tempo_ciclo)
-                processed_data['QTA'].append(qta)
-                processed_data['Description'].append(description)
-
-                collection.insert_one(json_object)
-                print(f"Family {codice} was uploaded successfully")
-                success_count += 1
+                collection.update_one({'_id': family['_id']}, {'$set': {'catalogo': family['catalogo']}})
             except Exception as e:
-                print(f"Error encountered with family {codice}: {e}")
-                errors.append(codice)
+                errors.append({'Famiglia di prodotto': famiglia, 'Reason': f'Error updating database: {e}'})
                 error_count += 1
 
-        summary_message = f"{success_count} families uploaded successfully, {error_count} failed: {', '.join(errors)}"
-        QMessageBox.information(self, "Upload Summary", summary_message)
+        # Prepare the summary message
+        summary_message = f"{success_count} articoli processed successfully, {error_count} errors."
+        if errors:
+            error_messages = "\n".join([f"{error.get('Codice Articolo', error.get('Famiglia di prodotto'))}: {error['Reason']}" for error in errors])
+            QMessageBox.information(self, "Processing Summary", summary_message + "\nErrors:\n" + error_messages)
+        else:
+            QMessageBox.information(self, "Processing Summary", summary_message)
+
+        # Create the report content
+        report_message = "Articoli Upload Report:\n\n"
+        report_message += summary_message + "\n\n"
+
+        if processed_articoli:
+            report_message += "Successfully processed articoli:\n"
+            report_message += "\n".join(processed_articoli) + "\n\n"
+
+        if errors:
+            report_message += "Errors encountered:\n"
+            for error in errors:
+                error_detail = f"{error.get('Codice Articolo', error.get('Famiglia di prodotto'))}: {error['Reason']}"
+                report_message += error_detail + "\n"
+
+        # Write the report to a .txt file
+        save_report_to_file(report_message, "articoli")
+
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)

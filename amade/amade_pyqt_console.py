@@ -1331,7 +1331,7 @@ class MainWindow(QMainWindow):
         skipped_families = []
 
         # Check if required columns are present in the DataFrame
-        required_columns = {'Codice', 'FaseOperativo', 'LTFase', 'Tempo Ciclo', 'Descrizione', 'Accessori'}
+        required_columns = {'Codice', 'FaseOperativo', 'LTFase', 'Tempo Ciclo', 'Descrizione'}
         if not required_columns.issubset(df.columns):
             missing_columns = required_columns - set(df.columns)
             QMessageBox.critical(self, "File Error", "Missing required columns: " + ", ".join(missing_columns))
@@ -1358,8 +1358,12 @@ class MainWindow(QMainWindow):
                     fasi = group['FaseOperativo'].tolist()
                     lt_fase = group['LTFase'].tolist()
                     tempo_ciclo = group['Tempo Ciclo'].tolist()
-                    description = group['Descrizione'].iloc[0] + " " + " ".join(group['Accessori'].dropna().unique())
-
+                    
+                    if group['Accessori'].dropna().unique():
+                        description = group['Descrizione'].iloc[0] + " " + " ".join(group['Accessori'].dropna().unique())
+                    else:
+                        description = group['Descrizione'].iloc[0]
+                    
                     print(f"Creating and uploading JSON for Codice: {codice}")
                     json_object = create_json_for_flowchart(codice, fasi, tempo_ciclo, lt_fase, description)
 

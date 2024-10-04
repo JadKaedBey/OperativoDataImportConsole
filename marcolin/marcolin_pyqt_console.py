@@ -1230,8 +1230,12 @@ class MainWindow(QMainWindow):
                     fasi = group['FaseOperativo'].tolist()
                     lt_fase = group['LTFase'].tolist()
                     tempo_ciclo = group['Tempo Ciclo'].tolist()
-                    description = group['Descrizione'].iloc[0] + " " + " ".join(group['Accessori'].dropna().unique())
-
+                    
+                    if group['Accessori'].dropna().unique():
+                        description = group['Descrizione'].iloc[0] + " " + " ".join(group['Accessori'].dropna().unique())
+                    else:
+                        description = group['Descrizione'].iloc[0]
+                    
                     print(f"Creating and uploading JSON for Codice: {codice}")
                     json_object = create_json_for_flowchart(codice, fasi, tempo_ciclo, lt_fase, description)
 

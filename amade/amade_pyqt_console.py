@@ -111,6 +111,15 @@ def get_phase_end_times(phases, codiceArticolo):
     
     return end_times
 
+def check_family_existance_db(familyName):
+    process_db = client['process_db']
+    famiglie_di_prodotto = process_db['famiglie_di_prodotto']
+    
+    family = famiglie_di_prodotto.find_one({"titolo": familyName})
+    
+    if family:
+        return True
+
 def get_phase_queue_times(phases, codiceArticolo):
     # Initialize the list to store phase end times
     queue_times = []
@@ -1313,13 +1322,16 @@ class MainWindow(QMainWindow):
 
         try:
             # Reading the Excel file
-            df = pd.read_excel(file_path)
+            df = pd.read_excel(file_path, sheet_name='Famiglie')
         except Exception as e:
             QMessageBox.critical(self, "File Error", f"Failed to read the Excel file: {e}")
             return
+        successful_families = []
+        failed_families = []
+        skipped_families = []
 
         # Check if required columns are present in the DataFrame
-        required_columns = {'Codice', 'FaseOperativo', 'LTFase', 'Tempo Ciclo', 'Qta', 'Descrizione', 'Accessori'}
+        required_columns = {'Codice', 'FaseOperativo', 'LTFase', 'Tempo Ciclo', 'Descrizione', 'Accessori'}
         if not required_columns.issubset(df.columns):
             missing_columns = required_columns - set(df.columns)
             QMessageBox.critical(self, "File Error", "Missing required columns: " + ", ".join(missing_columns))
@@ -1337,33 +1349,49 @@ class MainWindow(QMainWindow):
         error_count = 0
         errors = []
         for codice, group in df.groupby('Codice'):
-            try:
-                fasi = group['FaseOperativo'].tolist()
-                lt_fase = group['LTFase'].tolist()
-                tempo_ciclo = group['Tempo Ciclo'].tolist()
-                qta = group['Qta'].iloc[0]
-                description = group['Descrizione'].iloc[0] + " " + " ".join(group['Accessori'].dropna().unique())
-
-                print(f"Creating and uploading JSON for Codice: {codice}")
-                json_object = create_json_for_flowchart(codice, fasi, tempo_ciclo, lt_fase, description)
-
-                # Upload JSON object directly to MongoDB
-                collection.insert_one(json_object)
-                print(f"Uploaded JSON for Codice: {codice} to MongoDB")
-                success_count += 1
-            except Exception as e:
-                print(f"Error encountered with family {codice}: {e}")
-                errors.append(codice)
+            if check_family_existance_db(codice):
+                print(f'Family: {codice} already presnt in DB')
+                skipped_families.append(codice)
                 error_count += 1
+            else:
+                try:
+                    fasi = group['FaseOperativo'].tolist()
+                    lt_fase = group['LTFase'].tolist()
+                    tempo_ciclo = group['Tempo Ciclo'].tolist()
+                    description = group['Descrizione'].iloc[0] + " " + " ".join(group['Accessori'].dropna().unique())
+
+                    print(f"Creating and uploading JSON for Codice: {codice}")
+                    json_object = create_json_for_flowchart(codice, fasi, tempo_ciclo, lt_fase, description)
+
+                    # Upload JSON object directly to MongoDB
+                    collection.insert_one(json_object)
+                    print(f"Uploaded JSON for Codice: {codice} to MongoDB")
+                    successful_families.append(codice)
+                    success_count += 1
+                except Exception as e:
+                    print(f"Error encountered with family {codice}: {e}")
+                    failed_families.append(codice)
+                    error_count += 1
 
         summary_message = f"{success_count} families uploaded successfully, {error_count} failed: {', '.join(errors)}"
         QMessageBox.information(self, "Upload Summary", summary_message)
+                
+        report_message = "Orders Upload Report:\n\n"
+        report_message += summary_message + "\n\n"
 
-        # TESTING: 
-        # print("Exporting data to Excel...")
-        # output_df = pd.DataFrame(processed_data)
-        # output_df.to_excel(os.path.join(output_directory, 'formatted_output.xlsx'), index=False)
+        if successful_families:
+            report_message += "Successfully processed families:\n"
+            report_message += "\n".join(successful_families) + "\n\n"
 
+        if failed_families:
+            report_message += "Errors encountered:\n"
+            for error in failed_families:
+                error_detail = f"{error.get('codice', error.get('codice'))}: {error['reason']}"
+                report_message += error_detail + "\n"
+
+        # Show a report of the upload process
+        show_family_upload_report(successful_families, failed_families, skipped_families)
+        
     def select_database_and_collection(self):
         databases = client.list_database_names()
 
@@ -1552,6 +1580,29 @@ class MainWindow(QMainWindow):
 
         # Write the report to a .txt file
         save_report_to_file(report_message, "articoli")
+
+    def show_family_upload_report(successful_families, failed_families, skipped_families):
+        report_message = "Upload Report:\n\n"
+
+        if successful_families:
+            report_message += "Successfully uploaded Families:\n"
+            report_message += "\n".join([str(family) for family in successful_families])
+            report_message += "\n\n"
+
+        if failed_families:
+            report_message += "Failed to upload Families:\n"
+            for failed in failed_families:
+                family_name = failed.get('familyName', 'Unknown')
+                report_message += f"Family ID: {failed['familyID']}, Codice: {family_name}, Reason: {failed['reason']}\n"
+                
+        if skipped_families:
+            report_message += "Skipped families (already in database):\n"
+            report_message += "\n".join(skipped_families) + "\n\n"
+
+        # Show the message in a popup dialog
+        QMessageBox.information(None, "Upload Report", report_message)
+        
+        save_report_to_file(report_message, "families")
 
 
 if __name__ == '__main__':

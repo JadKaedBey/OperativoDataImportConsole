@@ -4,3 +4,4 @@ pymongo
 Pillow
 qrcode
 python-dotenv
+openpyxl

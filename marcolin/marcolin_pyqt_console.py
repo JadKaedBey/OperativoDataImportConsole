@@ -721,13 +721,17 @@ def upload_orders_from_xlsx_amade(self):
         codiceArticolo = row['Codice Articolo']
         qta = row['QTA']
         dataRichiesta = row['Data Richiesta']
-        infoAggiuntive = row['Info aggiuntive']
+        infoAggiuntive = row['Info aggiuntive'] or ''
+        
+        # Double check that infoaggiuntive will not cause crash
+        if pd.isna(infoAggiuntive) or infoAggiuntive.strip() == "":
+            infoAggiuntive = "0"
 
         if ordineId in existing_order_ids:
             skipped_orders.append(ordineId)
             continue  # Skip processing this order
         
-        print('Trying to check data Rcihesta')
+        print('Trying to check data Richesta')
         # Validate dataRichiesta
         if pd.isnull(dataRichiesta):
             failed_orders.append({'ordineId': ordineId, 'codiceArticolo': codiceArticolo, 'reason': 'Data Richiesta is null'})
@@ -741,7 +745,7 @@ def upload_orders_from_xlsx_amade(self):
                 failed_orders.append({'ordineId': ordineId, 'codiceArticolo': codiceArticolo, 'reason': f'Invalid date: {dataRichiesta}'})
                 continue
 
-        print('Data Rcihesta is good: ', dataRichiesta)
+        print('Data Richesta is good: ', dataRichiesta)
         
         # Check if the 'codiceArticolo' exists in 'catalogo'
         catalog_info = prodId_to_catalog_info.get(codiceArticolo)
@@ -1209,7 +1213,15 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "File Error", "Missing required columns: " + ", ".join(missing_columns))
             return
 
-        output_directory = './output_jsons'
+         # Convert `Tempo Ciclo` to a decimal number (float) and round it (for marcolin who will insert TC/Qta)
+        try:
+            df['Tempo Ciclo'] = pd.to_numeric(df['Tempo Ciclo'], errors='coerce').round()
+        except Exception as e:
+            QMessageBox.critical(self, "Conversion Error", f"Failed to convert and round 'Tempo Ciclo': {e}")
+            return
+        
+        # Fill any NaN values resulting from conversion,
+        df['Tempo Ciclo'].fillna(0, inplace=True)
 
         db_name = 'process_db'
         collection_name = 'famiglie_di_prodotto'

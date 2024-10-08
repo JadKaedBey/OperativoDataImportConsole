@@ -1240,6 +1240,14 @@ class MainWindow(QMainWindow):
             else:
                 try:
                     fasi = group['FaseOperativo'].tolist()
+                    
+                    lowercase_fasi = [fase.lower() for fase in fasi]
+                    if len(lowercase_fasi) != len(set(lowercase_fasi)):
+                        print(f"Duplicate phases found (case-insensitive) for family {codice}: {fasi}")
+                        failed_families.append({'codice': codice, 'reason': 'Duplicate phases found'})
+                        error_count += 1
+                        continue  # Skip this family if duplicate phases are found
+                    
                     lt_fase = group['LTFase'].tolist()
                     tempo_ciclo = group['Tempo Ciclo'].tolist()
                     

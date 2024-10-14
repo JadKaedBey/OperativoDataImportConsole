@@ -5,3 +5,6 @@ Pillow
 qrcode
 python-dotenv
 openpyxl
+numpy
+ast
+re

@@ -15,6 +15,7 @@ from bson import ObjectId
 from dotenv import load_dotenv
 from datetime import timedelta
 from functools import reduce
+from export_utils import order_status_mapper, phase_status_mapper, column_mapping, fetch_in_coda_at_names, map_in_lavorazione_at_value, fetch_in_lavorazione_at_names, map_in_coda_at, calculate_in_coda, parse_value, map_in_coda_at_value, parse_entrata_coda_fase, create_new_row, format_queue_entry_time, parse_columns
 
 queued_df = pd.DataFrame()
 client = None  # Initialize MongoDB client variable
@@ -1335,18 +1336,99 @@ class MainWindow(QMainWindow):
     def export_data(self, db_name, collection_name):
         print(f"Attempting to export data from {db_name}.{collection_name}...")
         try:
+            # Connect to MongoDB and fetch data
             db = client[db_name]
             collection = db[collection_name]
             cursor = collection.find({})
             data = list(cursor)
+
             if data:
                 df = pd.DataFrame(data)
                 if '_id' in df.columns:
                     df.drop('_id', axis=1, inplace=True)
-                file_path, _ = QFileDialog.getSaveFileName(self, "Save CSV", "", "CSV files (*.csv)")
-                if file_path:
-                    df.to_csv(file_path, index=False)
-                    QMessageBox.information(self, "Export Successful", "Data has been successfully exported to CSV.")
+
+                print("Available columns in the data:")
+                print(df.columns.tolist())
+
+                # Fetch machine names (map ObjectId to machine name)
+                id_to_name = fetch_in_coda_at_names(client)
+                # Fetch the UUID-to-name mapping
+                uuid_to_name = fetch_in_lavorazione_at_names(client)
+
+                # Ensure all required columns are present
+                required_columns = ['phase', 'phaseStatus', 'assignedOperator', 'phaseLateMotivation', 'phaseEndTime', 'phaseRealTime', 'entrataCodaFase']
+                missing_columns = [col for col in required_columns if col not in df.columns]
+                if missing_columns:
+                    QMessageBox.critical(self, "Export Failed", f"Missing required columns: {', '.join(missing_columns)}")
+                    return
+
+                # List of columns to parse
+                columns_to_parse = ['phaseStatus', 'assignedOperator', 'phaseLateMotivation', 'phaseEndTime', 'phaseRealTime', 'inCodaAt', 'inLavorazioneAt', 'entrataCodaFase']
+
+                # Store all expanded rows
+                all_expanded_rows = []
+
+                # Iterate over each row in the DataFrame
+                for idx, row in df.iterrows():
+                    phases = parse_value(row['phase'])
+                    if not phases:
+                        print(f"Skipping row {idx}: 'phase' value is invalid.")
+                        continue
+
+                    # Parse columns
+                    parsed_columns = parse_columns(row, columns_to_parse, id_to_name)
+
+                    parsed_columns['inCodaAt'] = [map_in_coda_at_value(v, id_to_name) for v in parsed_columns['inCodaAt']]
+                    
+                    if 'inLavorazioneAt' in parsed_columns:
+                        parsed_columns['inLavorazioneAt'] = [map_in_lavorazione_at_value(v, uuid_to_name) for v in parsed_columns['inLavorazioneAt']]
+                        
+                    # Create new expanded rows based on phases
+                    new_rows = create_new_row(row, phases, parsed_columns, columns_to_parse)
+                    all_expanded_rows.extend(new_rows)
+
+                if all_expanded_rows:
+                    final_expanded_df = pd.DataFrame(all_expanded_rows)
+
+                    # Add sequence number if needed
+                    if 'orderId' in final_expanded_df.columns:
+                        final_expanded_df['Sequenza'] = final_expanded_df.groupby('orderId').cumcount() + 1
+                    else:
+                        final_expanded_df['Sequenza'] = range(1, len(final_expanded_df) + 1)
+
+                    # Can only perform here since later the phaseStatis gets mapped to Strings
+                    final_expanded_df['in coda'] = calculate_in_coda(final_expanded_df)
+                    
+                    # Map status columns
+                    if 'orderStatus' in final_expanded_df.columns:
+                        final_expanded_df['orderStatus'] = final_expanded_df['orderStatus'].apply(order_status_mapper)
+                    if 'phaseStatus' in final_expanded_df.columns:
+                        final_expanded_df['phaseStatus'] = final_expanded_df['phaseStatus'].apply(phase_status_mapper)
+
+                    # Rename columns
+                    final_expanded_df.rename(columns=column_mapping, inplace=True)
+
+                    # Format 'Queue Entry Time' column
+                    if 'Queue Entry Time' in final_expanded_df.columns:
+                        final_expanded_df['Queue Entry Time'] = final_expanded_df['Queue Entry Time'].apply(format_queue_entry_time)
+
+                    # Convert column to integers, coercing errors to NaN and filling NaN with 0
+                    final_expanded_df['Quantità'] = pd.to_numeric(final_expanded_df['Quantità'], errors='coerce').fillna(0).astype(int)
+                    final_expanded_df['Lead Time Fase'] = pd.to_numeric(final_expanded_df['Lead Time Fase'], errors='coerce').fillna(0).astype(int)
+                    final_expanded_df['Tempo Ciclo Performato'] = pd.to_numeric(final_expanded_df['Tempo Ciclo Performato'], errors='coerce').fillna(0).astype(int)
+                    final_expanded_df['Priorità'] = pd.to_numeric(final_expanded_df['Priorità'], errors='coerce').fillna(0).astype(int)
+                    final_expanded_df['Sequenza'] = pd.to_numeric(final_expanded_df['Sequenza'], errors='coerce').fillna(0).astype(int)
+
+                    # Save the DataFrame to Excel
+                    options = QFileDialog.Options()
+                    file_path, _ = QFileDialog.getSaveFileName(self, "Save Excel File", "", "Excel Files (*.xlsx);;All Files (*)", options=options)
+                    if file_path:
+                        final_expanded_df.to_excel(file_path, index=False)
+                        QMessageBox.information(self, "Export Successful", "Data has been successfully exported to Excel.")
+                    else:
+                        print("No file path was selected.")
+                else:
+                    QMessageBox.information(self, "No Data", "No rows were expanded. The output file was not created.")
             else:
                 QMessageBox.information(self, "No Data", "There is no data to export.")
         except Exception as e:

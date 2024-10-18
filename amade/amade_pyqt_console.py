@@ -78,6 +78,17 @@ def fetch_settings():
     
     return settings
 
+def fetchMacchinari():
+    global client
+    db = client['process_db']
+    macchinari_collection = db['macchinari']
+    
+    # Fetch all macchinari names
+    macchinari_names = macchinari_collection.find({}, {'_id': 0, 'name': 1})
+    macchinari_list = [item['name'] for item in macchinari_names]
+    
+    return macchinari_list
+
 def get_phase_end_times(phases, codiceArticolo):
     # Initialize the list to store phase end times
     end_times = []
@@ -1006,8 +1017,7 @@ def show_family_upload_report(successful_families, failed_families, skipped_fami
         if failed_families:
             report_message += "Failed to upload Families:\n"
             for failed in failed_families:
-                family_name = failed.get('familyName', 'Unknown')
-                report_message += f"Family ID: {failed['familyID']}, Codice: {family_name}, Reason: {failed['reason']}\n"
+                report_message += f"Family ID: {failed['familyID']}, Codice: {failed['codice']}, Reason: {failed['reason']}\n"
                 
         if skipped_families:
             report_message += "Skipped families (already in database):\n"
@@ -1381,6 +1391,15 @@ class MainWindow(QMainWindow):
             else:
                 try:
                     fasi = group['FaseOperativo'].tolist()
+                    # Check for any phases in FaseOperativo that are not in macchinari_list
+                    macchinari_list = fetchMacchinari()
+                    missing_phases = [fase for fase in fasi if fase not in macchinari_list]
+
+                    if missing_phases:
+                        failed_families.append({'familyID': set(group['ID'].tolist()),'codice': f'{codice}', 'reason': f'Hai provato di inserire una famiglia che contiene delle Lavorazioni (Fasi) che non esistono nella Basi Dati di Operativo. {missing_phases}'})
+                        error_count += 1
+                        print(f"Questi fasi non sono nella lista di macchinari: {missing_phases}")
+                        continue
                     
                     lowercase_fasi = [fase.lower() for fase in fasi]
                     if len(lowercase_fasi) != len(set(lowercase_fasi)):

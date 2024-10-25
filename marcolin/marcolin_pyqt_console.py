@@ -13,9 +13,12 @@ import os
 import datetime
 from bson import ObjectId
 from dotenv import load_dotenv
-from datetime import timedelta
 from functools import reduce
+import numpy as np
+import ast
+import re  
 from export_utils import order_status_mapper, phase_status_mapper, column_mapping, fetch_in_coda_at_names, map_in_lavorazione_at_value, fetch_in_lavorazione_at_names, map_in_coda_at, calculate_in_coda, parse_value, map_in_coda_at_value, parse_entrata_coda_fase, create_new_row, format_queue_entry_time, parse_columns
+from order_insert_utils import calculate_phase_dates
 
 queued_df = pd.DataFrame()
 client = None  # Initialize MongoDB client variable
@@ -35,6 +38,8 @@ window_height = 1600
 
 load_dotenv()  # Load environment variables from .env file
 
+# MongoDB Functions:
+
 def connect_to_mongodb(username, password):
     global client
     print(f"Attempting to connect with username: {username} and password: {password}")
@@ -49,6 +54,8 @@ def connect_to_mongodb(username, password):
             client = MongoClient(os.getenv("DEMO_URI"))
         elif username == "demoveloce" and password == "demoveloce":
             client = MongoClient(os.getenv("DEMO_VELOCE_URI"))
+        elif username == "launch" and password == "launch":
+            client = MongoClient(os.getenv("LAUNCH_URI"))
         else:
             print("Invalid credentials")
             return False
@@ -119,6 +126,15 @@ def get_phase_end_times(phases, codiceArticolo):
     
     return end_times
 
+def check_family_existance_db(familyName):
+    process_db = client['process_db']
+    famiglie_di_prodotto = process_db['famiglie_di_prodotto']
+    
+    family = famiglie_di_prodotto.find_one({"titolo": familyName})
+    
+    if family:
+        return True
+
 def get_phase_queue_times(phases, codiceArticolo):
     # Initialize the list to store phase end times
     queue_times = []
@@ -172,15 +188,6 @@ def get_queue_times(phases, codiceArticolo):
                     break
     return queues
 
-def check_family_existance_db(familyName):
-    process_db = client['process_db']
-    famiglie_di_prodotto = process_db['famiglie_di_prodotto']
-    
-    family = famiglie_di_prodotto.find_one({"titolo": familyName})
-    
-    if family:
-        return True
-
 def get_phase_durations(phases, codiceArticolo):
     process_db = client['process_db']
     famiglie_di_prodotto = process_db['famiglie_di_prodotto']
@@ -197,306 +204,38 @@ def get_phase_durations(phases, codiceArticolo):
                     break
     return durations
 
-def fetch_flowchart_data(codiceArticolo):
-    global client
-    db = client['process_db']
-    collection = db['famiglie_di_prodotto']
-
-    # Fetch the family document from the collection
-    family = collection.find_one({"catalogo.prodId": codiceArticolo})
-
-    print('Found Family:', family['titolo'])
-    
-    if not family or 'dashboard' not in family:
-        raise ValueError("No valid dashboard found for the given family ID.")
-    
-    dashboard = family['dashboard']
-    graph = {}
-    reverse_graph = {}
-    durations = {}
-    queues = {}
-    indegree = {}
-
-    elements = dashboard.get('elements', [])
-    for node in elements:
-        node_id = node['id']
-        duration = node.get('phaseDuration', 0)
-        queue = node.get('phaseTargetQueue', duration)
-
-        # Initialize the node in the graph
-        durations[node_id] = duration
-        queues[node_id] = queue
-        graph[node_id] = []
-
-        # Ensure every node is initialized in the reverse_graph (even without incoming edges)
-        if node_id not in reverse_graph:
-            reverse_graph[node_id] = []
-
-        # Process connections (outgoing edges)
-        for next_node in node.get('next', []):
-            dest_id = next_node['destElementId']
-            graph[node_id].append(dest_id)
-
-            # Increment the indegree for reverse graph construction
-            indegree[dest_id] = indegree.get(dest_id, 0) + 1
-
-            # Add to reverse graph (dest_id -> node_id)
-            if dest_id not in reverse_graph:
-                reverse_graph[dest_id] = []
-            reverse_graph[dest_id].append(node_id)
-
-    # Debugging print statements to verify structures
-    print("Graph:", graph)
-    print("Reverse Graph:", reverse_graph)
-    print("Durations:", durations)
-    print("Queues:", queues)
-    print("Indegree:", indegree)
-
-    return graph, reverse_graph, durations, queues, indegree, dashboard
-
-def calculate_phase_dates(end_date, phases, quantity, settings, codiceArticolo):
-    
-    settings = fetch_settings()
-    
-    print('Calculating Phase Dates')
-    open_time = settings.get('orariAzienda', {}).get('inizio', {'ore': 8, 'minuti': 0})
-    close_time = settings.get('orariAzienda', {}).get('fine', {'ore': 18, 'minuti': 0})
-    holiday_list = settings.get('ferieAziendali', [])
-    pausa_pranzo = settings.get('pausaPranzo', {'inizio': {'ore': 12, 'minuti': 0}, 'fine': {'ore': 15, 'minuti': 0}})
-
-    print('Open Time:', open_time)
-    print('Close Time:', close_time)
-    print('Holiday Time:', holiday_list)
-    print('Pausa Time:', pausa_pranzo)
-    
-    phase_durations = get_phase_end_times(phases, codiceArticolo)
-    
-    print('Got Phase durations (Tempo ciclo):', phase_durations)
-    
-    entrata_coda_fase = []
-    
-    for i, phase in enumerate(phases):
-        # Calculate phase duration based on quantity
-        duration = phase_durations[i] * quantity
-        
-        graph, reverse_graph, durations, queues, indegree, dashboard = fetch_flowchart_data(codiceArticolo)
-    
-        print('checking end_date type', type(end_date))
-        # Calculate start date for the phase, taking into account work hours, breaks, and holidays
-        start_date = find_start_date_of_phase(
-            end_date, 
-            phase, #target phase
-            quantity, 
-            open_time, 
-            close_time, 
-            holiday_list, 
-            pausa_pranzo, 
-            graph,
-            reverse_graph, 
-            queues, 
-            dashboard,
-            durations
-        )
-        print("Found start_date of equal to", phase, start_date)
-        
-        if start_date:
-            # Append the queue or cycle start date as a single-layer array
-            if start_date[0][0] < start_date[1][0]:
-                entrata_coda_fase.append(start_date[0][0])  # Queue start is earlier
-            else:
-                entrata_coda_fase.append(start_date[1][0])  # Cycle start is earlier
-        else:
-            # Default handling if None is returned
-            entrata_coda_fase.append(None)
-        
-        
-        
-        # Update end_date to the start date of the current phase for the next iteration
-        end_date = start_date[0][0] if start_date else end_date
-    
-    print('Entrata coda phase:', entrata_coda_fase)
-    return entrata_coda_fase
-
-def get_graph_layers_from_end(graph, reverse_graph):
-    local_reverse_graph = reverse_graph.copy()
-    layers = []
-    visited = set()
-    queue = []
-
-    # Identify all end nodes (nodes with no outgoing edges)
-    for node_id, edges in graph.items():
-        if not edges:
-            queue.append(node_id)
-            visited.add(node_id)
-
-    # Start from end nodes and traverse backwards
-    while queue:
-        current_layer = []
-        layer_size = len(queue)
-
-        for _ in range(layer_size):
-            node_id = queue.pop(0)
-            current_layer.append(node_id)
-
-            # Traverse to all nodes pointing to the current node (predecessors)
-            if node_id in local_reverse_graph:
-                for predecessor in local_reverse_graph[node_id]:
-                    if predecessor not in visited:
-                        queue.append(predecessor)
-                        visited.add(predecessor)
-
-        layers.insert(0, current_layer)
-
-    return layers
-
-def find_start_date_of_phase(end_date, target_phase, quantity, open_time, close_time, holiday_list, pausa_pranzo, graph, reverse_graph, queues, dashboard, durations, duration=-1):
-    """
-    Find the start date of a phase by traversing backwards from the end nodes.
-    """
-    print('Trying to find Start date of phase for', target_phase)
-    
-    # Create a mapping of phase names to node IDs
-    phase_name_to_id = {node['text']: node['id'] for node in dashboard.get('elements', [])}
-    
-    # Check if the target_phase exists in the mapping
-    if target_phase not in phase_name_to_id:
-        raise ValueError(f"Target phase '{target_phase}' not found in the dashboard.")
-    
-    # Get the node ID corresponding to the target phase
-    target_phase_id = phase_name_to_id[target_phase]
-    print(f"Target phase '{target_phase}' corresponds to node ID: {target_phase_id}")
-    
-    # Function to traverse the graph backwards from the end nodes to find the target phase
-    def traverse_backwards(current_id):
-        print(f"Traversing node: {current_id}, looking for target phase: {target_phase_id}")
-        if current_id == target_phase_id:
-            print(f"Found target phase: {current_id}")    
-            return [queues[current_id], duration if duration >= 0 else durations[current_id] * quantity]
-        
-        if current_id not in reverse_graph:
-            print('Target phase not in reverse_graph: returning None', current_id)
-            return None
-        
-        for prev_id in reverse_graph[current_id]:
-            print(f"Traversing to previous node: {prev_id}")
-            result = traverse_backwards(prev_id)
-            if result:
-                print(f"Found path from {current_id} to {prev_id}: {result}")
-                return [result[0] + queues[current_id], result[1] + (duration if duration >= 0 else durations[current_id] * quantity)]
-            
-        print(f"No valid path found for node: {current_id}")
-        return None
-
-    # Calculate time durations
-    pausa_duration = (datetime.timedelta(hours=pausa_pranzo['fine']['ore'], minutes=pausa_pranzo['fine']['minuti']) -
-                      datetime.timedelta(hours=pausa_pranzo['inizio']['ore'], minutes=pausa_pranzo['inizio']['minuti']))
-    
-    print('Found pausa_duration equal to', pausa_duration)
-    
-    minutes_in_day = (datetime.timedelta(hours=close_time['ore'], minutes=close_time['minuti']) -
-                      datetime.timedelta(hours=open_time['ore'], minutes=open_time['minuti']) -
-                      pausa_duration).total_seconds() / 60
-    
-    print('Found minutes_in_day equal to', minutes_in_day)
-    
-    print("Check the structure of reverse_graph ", reverse_graph)  
-    
-    end_nodes = [node_id for node_id, edges in graph.items() if not edges]
-    
-    print('End nodes: ', end_nodes)
-    
-    def adjust_to_work_hours(possible_date):
-        start_work = datetime.time(open_time['ore'], open_time['minuti'])
-        end_work = datetime.time(close_time['ore'], close_time['minuti'])
-        lunch_start = datetime.time(pausa_pranzo['inizio']['ore'], pausa_pranzo['inizio']['minuti'])
-        lunch_end = datetime.time(pausa_pranzo['fine']['ore'], pausa_pranzo['fine']['minuti'])
-        
-        print('Company Hours:')
-        print(start_work)
-        print(end_work)
-        print(lunch_start)
-        print(lunch_end)
-
-        # Check for holidays
-        if any(holiday['inizio'].date() <= possible_date.date() <= holiday['fine'].date() for holiday in holiday_list):
-            possible_date -= timedelta(days=1)
-            possible_date = possible_date.replace(hour=start_work.hour, minute=start_work.minute)
-            return adjust_to_work_hours(possible_date)
-
-        # Adjust time if before or after working hours
-        if possible_date.time() < start_work:
-            possible_date = possible_date.replace(hour=start_work.hour, minute=start_work.minute)
-        elif possible_date.time() > end_work:
-            possible_date = possible_date + timedelta(days=1)
-            possible_date = possible_date.replace(hour=start_work.hour, minute=start_work.minute)
-
-        # Adjust if within lunch break
-        if lunch_start <= possible_date.time() <= lunch_end:
-            possible_date = possible_date.replace(hour=lunch_end.hour, minute=lunch_end.minute)
-        
-        return possible_date
-
-    # Calculate time respecting working hours and holidays
-    def calculate_possible_date(total_minutes, end_date):
-        print('Calculating possible date')
-        possible_date = end_date - timedelta(days=total_minutes // minutes_in_day, minutes=total_minutes % minutes_in_day)
-        possible_date = adjust_to_work_hours(possible_date)
-        
-        # Check for weekends and holidays
-        while possible_date.weekday() in [5, 6]:  # Saturday (5) or Sunday (6)
-            possible_date -= timedelta(days=2)
-            possible_date = adjust_to_work_hours(possible_date)
-            
-        print('Possible date found: ', possible_date)
-        return possible_date
-
-    for end_node in end_nodes:
-        print("Trying to traverse_backwards")
-        total_minutes = traverse_backwards(end_node)
-        print('Finished traverse_backwards, total_minutes:', total_minutes)
-        if total_minutes:
-            possible_queue_date = calculate_possible_date(total_minutes[1], end_date)
-            possible_cycle_date = calculate_possible_date(total_minutes[0], end_date)
-            
-            print('Found possible_queue_date and possible_cycle_date', possible_queue_date, possible_cycle_date)
-
-            return [[possible_queue_date], [possible_cycle_date]]
-
-    return None
-
 # Utils
 
-def subtract_workdays(end_date, workdays, open_time, close_time, holiday_list):
-    """
-    Subtracts the given number of workdays from the end date, skipping weekends and holidays.
-    """
-    while workdays > 0:
-        end_date -= datetime.timedelta(days=1)
+# def subtract_workdays(end_date, workdays, open_time, close_time, holiday_list):
+#     """
+#     Subtracts the given number of workdays from the end date, skipping weekends and holidays.
+#     """
+#     while workdays > 0:
+#         end_date -= datetime.timedelta(days=1)
         
-        # Skip weekends
-        if end_date.weekday() >= 5 or is_holiday(end_date, holiday_list):
-            continue
+#         # Skip weekends
+#         if end_date.weekday() >= 5 or is_holiday(end_date, holiday_list):
+#             continue
 
-        workdays -= 1
+#         workdays -= 1
 
-    return end_date
+#     return end_date
 
-def is_holiday(date, holiday_list):
-    """
-    Check if the date falls on a holiday by comparing against the holiday_list.
-    """
-    # print('in holiday')
-    for holiday in holiday_list:
-        # print(f"Holiday data: {holiday}")  # Debug statement
-        # OLD CODE CAUSING ERRORS: 
-        # holiday_start = datetime.datetime.fromtimestamp(holiday['inizio']['$date']['$numberLong'] / 1000)
-        # holiday_end = datetime.datetime.fromtimestamp(holiday['fine']['$date']['$numberLong'] / 1000)
-        holiday_start = holiday['inizio']  # Assuming this is a datetime.datetime object
-        holiday_end = holiday['fine'] 
-        if holiday_start <= date <= holiday_end:
-            return True
-    return False
-
+# def is_holiday(date, holiday_list):
+#     """
+#     Check if the date falls on a holiday by comparing against the holiday_list.
+#     """
+#     # print('in holiday')
+#     for holiday in holiday_list:
+#         # print(f"Holiday data: {holiday}")  # Debug statement
+#         # OLD CODE CAUSING ERRORS: 
+#         # holiday_start = datetime.datetime.fromtimestamp(holiday['inizio']['$date']['$numberLong'] / 1000)
+#         # holiday_end = datetime.datetime.fromtimestamp(holiday['fine']['$date']['$numberLong'] / 1000)
+#         holiday_start = holiday['inizio']  # Assuming this is a datetime.datetime object
+#         holiday_end = holiday['fine'] 
+#         if holiday_start <= date <= holiday_end:
+#             return True
+#     return False
 
 # Orders
 
@@ -508,7 +247,7 @@ def create_order_object(phases, articolo, quantity, order_id, end_date, order_de
     print('quantity:', quantity)
     print('settings:', settings)
     print('articolo:', articolo)
-    phase_dates = calculate_phase_dates(end_date, phases, quantity, settings, articolo) #returns entrata coda fase
+    phase_dates = calculate_phase_dates(client, end_date, phases, quantity, settings, articolo) #returns entrata coda fase
     
     # Check if phase_dates is sorted in increasing order
     if phase_dates != sorted(phase_dates): 
@@ -528,12 +267,11 @@ def create_order_object(phases, articolo, quantity, order_id, end_date, order_de
         start_date = None
         print('Order Start Date could not be calculated')
         
-    # Align order structure with Flutter
     order_object = {
         "orderId": str(order_id),
         "orderInsertDate": datetime.datetime.now(),
         "orderStartDate": start_date,  # Start date based on calculated phase dates ERA phase_dates[0]
-        "assignedOperator": [[""] for _ in phases],
+        "assignedOperator": [[""] for _ in phases],  # Default empty assigned operator
         "orderStatus": 0,  # Initial status
         "orderDescription": order_description or '',
         "codiceArticolo": articolo,
@@ -549,14 +287,13 @@ def create_order_object(phases, articolo, quantity, order_id, end_date, order_de
         "priority": 0,  # Default priority
         "inCodaAt": [],  
         "inLavorazioneAt": [[""] for _ in phases],
+
     }
     
     return order_object
 
-
-
 def create_json_for_flowchart(codice, phases, cycle_times, queueTargetTimes, description):
-    """  Creates Family Json object 
+    """ Creates Family Json object 
 
     Args:
         codice (_type_): _description_
@@ -708,8 +445,6 @@ def upload_orders_from_xlsx_amade(self):
     successful_orders = []
     failed_orders = []
 
-    
-
     # Create a dictionary to map 'prodId' to catalog item and family information
     famiglia_cursor = collection_famiglie.find({}, {'catalogo': 1, 'dashboard': 1})
     prodId_to_catalog_info = {}
@@ -733,17 +468,13 @@ def upload_orders_from_xlsx_amade(self):
         codiceArticolo = row['Codice Articolo']
         qta = row['QTA']
         dataRichiesta = row['Data Richiesta']
-        infoAggiuntive = row['Info aggiuntive'] or ''
-        
-        # Double check that infoaggiuntive will not cause crash
-        if pd.isna(infoAggiuntive) or infoAggiuntive.strip() == "":
-            infoAggiuntive = "0"
+        infoAggiuntive = row['Info aggiuntive']
 
         if ordineId in existing_order_ids:
             skipped_orders.append(ordineId)
             continue  # Skip processing this order
         
-        print('Trying to check data Richesta')
+        print('Trying to check data Rcihesta')
         # Validate dataRichiesta
         if pd.isnull(dataRichiesta):
             failed_orders.append({'ordineId': ordineId, 'codiceArticolo': codiceArticolo, 'reason': 'Data Richiesta is null'})
@@ -757,7 +488,7 @@ def upload_orders_from_xlsx_amade(self):
                 failed_orders.append({'ordineId': ordineId, 'codiceArticolo': codiceArticolo, 'reason': f'Invalid date: {dataRichiesta}'})
                 continue
 
-        print('Data Richesta is good: ', dataRichiesta)
+        print('Data Rcihesta is good: ', dataRichiesta)
         
         # Check if the 'codiceArticolo' exists in 'catalogo'
         catalog_info = prodId_to_catalog_info.get(codiceArticolo)
@@ -840,29 +571,6 @@ def show_upload_report(successful_orders, failed_orders, skipped_orders):
     QMessageBox.information(None, "Upload Report", report_message)
     
     save_report_to_file(report_message, "orders")
-    
-def show_family_upload_report(successful_families, failed_families, skipped_families):
-    report_message = "Upload Report:\n\n"
-
-    if successful_families:
-        report_message += "Successfully uploaded Families:\n"
-        report_message += "\n".join([str(family) for family in successful_families])
-        report_message += "\n\n"
-
-    if failed_families:
-        report_message += "Failed to upload Families:\n"
-        for failed in failed_families:
-            family_name = failed.get('familyName', 'Unknown')
-            report_message += f"Family ID: {failed['familyID']}, Codice: {failed['codice']}, Reason: {failed['reason']}\n"
-            
-    if skipped_families:
-        report_message += "Skipped families (already in database):\n"
-        report_message += "\n".join(skipped_families) + "\n\n"
-
-    # Show the message in a popup dialog
-    QMessageBox.information(None, "Upload Report", report_message)
-    
-    save_report_to_file(report_message, "families")
 
 def save_report_to_file(report_content, report_type):
     if not os.path.exists('./reports'):
@@ -880,6 +588,177 @@ def save_report_to_file(report_content, report_type):
         print(f"Report saved to {file_path}")
     except Exception as e:
         print(f"Failed to save report: {e}")
+
+
+## DEPRECATED
+
+def map_phases(phase_string):
+    # Define the mappings
+    phase_mappings = {
+        'lavmec': 'Filettatura/Foratura',
+        'lav mecc': 'Filettatura/Foratura',
+        'taglio': 'Taglio',
+        'piega': 'Piega 1',
+        'smerigliatura/insertaggio': 'Smerigliatura',
+        'saldatura': 'Saldatura'
+    }
+    
+    # Split the phase string into individual phases
+    separators = ['-', '+']
+    for sep in separators:
+        if sep in phase_string:
+            phases = phase_string.split(sep)
+            break
+    else:
+        phases = [phase_string]  # If no separator is found, treat as a single phase
+    
+    # Map the phases using the predefined mappings
+    mapped_phases = []
+    for phase in phases:
+        phase = phase.strip()
+        for key in phase_mappings:
+            if key in phase:
+                mapped_phases.append(phase_mappings[key])
+                break
+    
+    return mapped_phases
+    
+
+def check_missing_families(articoli_checks):
+    missing_families = [check['Famiglia'] for check in articoli_checks if not check['FamigliaExists']]
+    
+    if missing_families:
+        QMessageBox.warning(None, "Missing Families", "The following families are missing in the database:\n" + "\n".join(missing_families))
+
+
+def create_order_object_with_dates(phases, codice_articolo, quantita, order_id, end_date, customer_deadline):
+    ""
+    DeprecationWarning
+    ""
+    
+    settings = fetch_settings()
+    
+    open_time = settings.get('orariAzienda', {}).get('inizio', {'ore': 8, 'minuti': 0})
+    close_time = settings.get('orariAzienda', {}).get('fine', {'ore': 18, 'minuti': 0})
+    holiday_list = settings.get('ferieAziendali', [])
+    pausa_pranzo = settings.get('pausaPranzo', {'inizio': {'ore': 12, 'minuti': 0}, 'fine': {'ore': 15, 'minuti': 0}})
+
+    graph = {phase: [] for phase in phases}
+    for i in range(len(phases) - 1):
+        graph[phases[i]].append(phases[i + 1])
+
+    phase_end_times = get_phase_end_times(phases)
+    durations = dict(zip(phases, phase_end_times))
+
+    entrata_coda_fase = []
+    for phase in phases:
+        # compute the delivery end time
+        if isinstance(end_date, str):
+            end_date = datetime.datetime(int(end_date.split("/")[2]), int(end_date.split("/")[1]), int(end_date.split("/")[0]), close_time['ore'], close_time['minuti'])
+            print('End Date after parsing is: ', end_date)
+
+        start_date = find_start_date_of_phase(end_date, phase, quantita, open_time, holiday_list, pausa_pranzo, graph, durations)
+        print("Found start_date of equal to", phase, start_date)
+        entrata_coda_fase.append([start_date])#(int(start_date.timestamp() * 1000)) if start_date else None)
+
+    non_null_dates = [date for date in entrata_coda_fase if date is not None]
+    # valore di default per evitare null
+    order_start_date = datetime.datetime.fromtimestamp(datetime.datetime.now().timestamp() / 1000) - datetime.timedelta(days=10)
+    if non_null_dates:
+        order_start_date = min(non_null_dates)
+
+    # sarebbe da mettere il controllo per vedere che non siano infattibili, ma credo si possa skippare
+    # if start_date is not None and start_date < datetime.now(): return
+    
+    current_time = datetime.datetime.now()
+    order_object = {
+        "codiceArticolo": str(codice_articolo),
+        # mancava order startDate
+        "orderInsertDate": current_time, #datetime.datetime.fromtimestamp(current_time.timestamp() / 1000),
+        # orderDeadline e customerDeadline sono la stessa cosa, col refactoring sistemiamo questa variabile
+        "orderDeadline": datetime.datetime(int(customer_deadline.split("/")[2]), int(customer_deadline.split("/")[1]), int(customer_deadline.split("/")[0]), close_time['ore'], close_time['minuti']) if isinstance(customer_deadline, str) else customer_deadline,
+        "customerDeadline": datetime.datetime(int(customer_deadline.split("/")[2]), int(customer_deadline.split("/")[1]), int(customer_deadline.split("/")[0]), close_time['ore'], close_time['minuti']) if isinstance(customer_deadline, str) else customer_deadline,
+        "orderDescription": "",
+        "orderStartDate": order_start_date[0],
+        "orderStatus": 0,
+        # sistemati tutti gli array
+        "phaseStatus": [[0] for _ in phases],
+        "assignedOperator": [[""] for _ in phases],
+        "phase": [[ph] for ph in phases],
+        "phaseEndTime": [[time] for time in phase_end_times],
+        "phaseLateMotivation": [["none"] for _ in phases],
+        "phaseRealTime": [[0] for _ in phases],
+        "quantita": quantita,
+        "entrataCodaFase": entrata_coda_fase,
+        "orderId": order_id,
+        "dataInizioLavorazioni": entrata_coda_fase[0][0], #datetime.datetime.fromtimestamp(current_time.timestamp() / 1000),
+        "priority": 0,
+        "inCodaAt": []
+    }
+    
+    return order_object
+
+def get_procedure_phases_by_prodId(prodId):
+    ""
+    # Not currently Used
+    ""
+    
+    db = client['process_db']
+    collection = db['famiglie_di_prodotto']
+    
+    # Search for the family containing the prodId in the catalogo array
+    document = collection.find_one({"catalogo.prodId": prodId})
+    
+    if not document:
+        # Print all documents for debugging purposes
+        all_documents = list(collection.find())
+        print("All documents in collection:")
+        for doc in all_documents:
+            print(doc)
+        raise ValueError(f"No document found with prodId {prodId}")
+    
+    # Now find the specific item in the catalogo array
+    catalog_item = next((item for item in document['catalogo'] if item['prodId'] == prodId), None)
+    
+    if not catalog_item:
+        raise ValueError(f"No catalog item found with prodId {prodId}")
+    
+    # Extract the 'elements' array from the dashboard
+    dashboard = document.get('dashboard', {})
+    elements = dashboard.get('elements', [])
+    
+    if not elements:
+        raise ValueError(f"No elements found in the dashboard for prodId {prodId}")
+    
+    # Extract the 'text' field from each element in the elements array (phases)
+    phases = [element.get('text') for element in elements if 'text' in element]
+    
+    if not phases:
+        raise ValueError(f"No phases found for prodId {prodId}")
+    
+    return phases
+
+def show_family_upload_report(successful_families, failed_families, skipped_families):
+        report_message = "Upload Report:\n\n"
+
+        if successful_families:
+            report_message += "Successfully uploaded Families:\n"
+            report_message += "\n".join([str(family) for family in successful_families])
+            report_message += "\n\n"
+
+        if failed_families:
+            report_message += "Failed to upload Families:\n"
+            for failed in failed_families:
+                report_message += f"Family ID: {failed['familyID']}, Codice: {failed['codice']}, Reason: {failed['reason']}\n"
+                
+        if skipped_families:
+            report_message += "Skipped families (already in database):\n"
+            report_message += "\n".join(skipped_families) + "\n\n"
+
+        # Show the message in a popup dialog
+        QMessageBox.information(None, "Upload Report", report_message)
+        
+        save_report_to_file(report_message, "families")
 
 class LoginWindow(QDialog):
     def __init__(self, parent=None):
@@ -960,7 +839,7 @@ class MainWindow(QMainWindow):
         # self.clear_button = QPushButton("Clear Queued Data")
         # self.upload_button = QPushButton("Upload Queued Data")
         # self.upload_button.setStyleSheet("background-color: green; color: white;")
-        self.upload_orders_button_amade = QPushButton("Upload Orders")
+        self.upload_orders_button_amade = QPushButton("Upload Orders Amade")
         self.upload_famiglie_button = QPushButton("Upload Flussi (Famiglie)")
         self.upload_famiglie_button.setStyleSheet("background-color: red; color: white;")
         self.export_button = QPushButton("Export Data")
@@ -1219,21 +1098,13 @@ class MainWindow(QMainWindow):
         skipped_families = []
 
         # Check if required columns are present in the DataFrame
-        required_columns = {'Codice', 'FaseOperativo', 'LTFase', 'Tempo Ciclo', 'Descrizione', 'Accessori'}
+        required_columns = {'Codice', 'FaseOperativo', 'LTFase', 'Tempo Ciclo', 'Descrizione'}
         if not required_columns.issubset(df.columns):
             missing_columns = required_columns - set(df.columns)
             QMessageBox.critical(self, "File Error", "Missing required columns: " + ", ".join(missing_columns))
             return
 
-         # Convert `Tempo Ciclo` to a decimal number (float) and round it (for marcolin who will insert TC/Qta)
-        try:
-            df['Tempo Ciclo'] = pd.to_numeric(df['Tempo Ciclo'], errors='coerce').round()
-        except Exception as e:
-            QMessageBox.critical(self, "Conversion Error", f"Failed to convert and round 'Tempo Ciclo': {e}")
-            return
-        
-        # Fill any NaN values resulting from conversion,
-        df['Tempo Ciclo'].fillna(0, inplace=True)
+        output_directory = './output_jsons'
 
         db_name = 'process_db'
         collection_name = 'famiglie_di_prodotto'
@@ -1308,7 +1179,7 @@ class MainWindow(QMainWindow):
 
         # Show a report of the upload process
         show_family_upload_report(successful_families, failed_families, skipped_families)
-
+        
     def select_database_and_collection(self):
         databases = client.list_database_names()
 
@@ -1409,12 +1280,28 @@ class MainWindow(QMainWindow):
 
                 if all_expanded_rows:
                     final_expanded_df = pd.DataFrame(all_expanded_rows)
+                    final_expanded_df['orderId'] = final_expanded_df['orderId'].astype(str)
+                    # Ensure 'Fase' (or any other relevant columns) are also treated correctly
+                    final_expanded_df['phase'] = final_expanded_df['phase'].astype(str)  
+                    
+                    final_expanded_df['Sequenza'] = 0
 
+                    # Loop through each row and assign the sequence manually
+                    current_order_id = None
+                    sequence = 0
                     # Add sequence number if needed
-                    if 'orderId' in final_expanded_df.columns:
-                        final_expanded_df['Sequenza'] = final_expanded_df.groupby('orderId').cumcount() + 1
-                    else:
-                        final_expanded_df['Sequenza'] = range(1, len(final_expanded_df) + 1)
+                    for idx, row in final_expanded_df.iterrows():
+                        if row['orderId'] != current_order_id:
+                            # New order, reset the sequence counter
+                            current_order_id = row['orderId']
+                            sequence = 1
+                        else:
+                            # Same order, increment the sequence
+                            sequence += 1
+                        
+                        # Assign the sequence to the 'Sequenza' column
+                        print(sequence)
+                        final_expanded_df.at[idx, 'Sequenza'] = sequence
 
                     # Can only perform here since later the phaseStatis gets mapped to Strings
                     final_expanded_df['in coda'] = calculate_in_coda(final_expanded_df)
@@ -1437,7 +1324,7 @@ class MainWindow(QMainWindow):
                     final_expanded_df['Lead Time Fase'] = pd.to_numeric(final_expanded_df['Lead Time Fase'], errors='coerce').fillna(0).astype(int)
                     final_expanded_df['Tempo Ciclo Performato'] = pd.to_numeric(final_expanded_df['Tempo Ciclo Performato'], errors='coerce').fillna(0).astype(int)
                     final_expanded_df['Priorità'] = pd.to_numeric(final_expanded_df['Priorità'], errors='coerce').fillna(0).astype(int)
-                    final_expanded_df['Sequenza'] = pd.to_numeric(final_expanded_df['Sequenza'], errors='coerce').fillna(0).astype(int)
+                    # final_expanded_df['Sequenza'] = pd.to_numeric(final_expanded_df['Sequenza'], errors='ignore').fillna(0).astype(int)
 
                     # Save the DataFrame to Excel
                     options = QFileDialog.Options()
@@ -1454,7 +1341,7 @@ class MainWindow(QMainWindow):
         except Exception as e:
             print(f"Error exporting data: {e}")
             QMessageBox.critical(self, "Export Failed", f"Failed to export data: {e}")
-            
+
     def upload_articoli(self):
         file_path, _ = QFileDialog.getOpenFileName(self, "Open Excel File", "", "Excel files (*.xlsx)")
         if not file_path:
@@ -1530,7 +1417,7 @@ class MainWindow(QMainWindow):
                 "_id": ObjectId(),
                 "prodId": codice_articolo,
                 "prodotto": descrizione_articolo,
-                "descrizione": "",  
+                "descrizione": "",  # You can include additional info if needed
                 "famiglia": famiglia_di_prodotto,
                 "elements": elements
             }
@@ -1579,6 +1466,8 @@ class MainWindow(QMainWindow):
         # Write the report to a .txt file
         save_report_to_file(report_message, "articoli")
 
+    
+
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
@@ -1588,3 +1477,50 @@ if __name__ == '__main__':
         main_window = MainWindow(login.user_role)
         main_window.show()
         sys.exit(app.exec_())
+
+
+
+# def find_start_date_of_phase(end_date, duration, open_time, close_time, pausa_pranzo, holiday_list):
+#     """
+#     Recursively calculates the start date of a phase by moving backwards from the end date.
+#     Accounts for working hours, lunch breaks, holidays, and weekends.
+#     """
+#     # Calculate the duration of a workday in minutes (excluding the lunch break)
+#     workday_start = datetime.timedelta(hours=open_time['ore'], minutes=open_time['minuti'])
+#     workday_end = datetime.timedelta(hours=close_time['ore'], minutes=close_time['minuti'])
+#     lunch_start = datetime.timedelta(hours=pausa_pranzo['inizio']['ore'], minutes=pausa_pranzo['inizio']['minuti'])
+#     lunch_end = datetime.timedelta(hours=pausa_pranzo['fine']['ore'], minutes=pausa_pranzo['fine']['minuti'])
+    
+#     # Total working time in a day excluding the lunch break
+#     workday_duration = (workday_end - workday_start).total_seconds() / 60
+#     lunch_duration = (lunch_end - lunch_start).total_seconds() / 60
+#     effective_workday_minutes = workday_duration - lunch_duration
+    
+#     # Calculate how many full workdays are required
+#     full_workdays_needed = duration // effective_workday_minutes
+#     remaining_minutes = duration % effective_workday_minutes
+
+#     # Move the end date back by the full workdays, skipping weekends and holidays
+#     start_date = subtract_workdays(end_date, full_workdays_needed, open_time, close_time, holiday_list)
+    
+#     # Now handle the remaining minutes
+#     while remaining_minutes > 0:
+#         # If the current day is a weekend or holiday, skip it
+#         if start_date.weekday() >= 5 or is_holiday(start_date, holiday_list):
+#             start_date -= datetime.timedelta(days=1)
+#             continue
+
+#         # Define workday start and end times for the current day
+#         workday_start_dt = start_date.replace(hour=open_time['ore'], minute=open_time['minuti'])
+#         workday_end_dt = start_date.replace(hour=close_time['ore'], minute=close_time['minuti'])
+
+#         # Check if we can fit the remaining minutes in the current workday
+#         if remaining_minutes <= (workday_end_dt - workday_start_dt).total_seconds() / 60:
+#             start_date -= datetime.timedelta(minutes=remaining_minutes)
+#             remaining_minutes = 0
+#         else:
+#             # Subtract a full workday and continue
+#             remaining_minutes -= effective_workday_minutes
+#             start_date -= datetime.timedelta(days=1)
+    
+#     return start_date

@@ -12,6 +12,7 @@ REM Install required packages
 echo Installing required packages...
 pip install -r requirements.txt
 
+echo Finished installing required packages
 REM Run the Python script
 python amade_pyqt_console.py
 

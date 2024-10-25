@@ -1281,8 +1281,10 @@ class MainWindow(QMainWindow):
 
                     # Add sequence number if needed
                     if 'orderId' in final_expanded_df.columns:
+                        print("Trying to add Seqeuenza column")
                         final_expanded_df['Sequenza'] = final_expanded_df.groupby('orderId').cumcount() + 1
                     else:
+                        print("Else of sequenza")
                         final_expanded_df['Sequenza'] = range(1, len(final_expanded_df) + 1)
 
                     # Can only perform here since later the phaseStatis gets mapped to Strings

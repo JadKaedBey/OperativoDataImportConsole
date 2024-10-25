@@ -104,6 +104,7 @@ def map_in_coda_at(value, id_to_name):
         return value
     
 def calculate_in_coda(df):
+            print("Assigning in coda")
             in_coda_values = []
             for i in range(len(df)):
                 if i == 0:
@@ -111,9 +112,26 @@ def calculate_in_coda(df):
                 else:
                     current_row = df.iloc[i]
                     prev_row = df.iloc[i - 1]
-                    
-                    current_row_status = int(current_row['phaseStatus'])
-                    prev_row_status = int(prev_row['phaseStatus'])
+                    #print("CURR")
+                    #print(current_row['orderId'])
+                    current_row_status = current_row['phaseStatus']
+                    print(current_row_status)
+                    print(type(current_row_status))
+                    prev_row_status = prev_row['phaseStatus']
+                    # Convert phaseStatus to the largest integer if it contains multiple values (Diramazione)
+                    def parse_phase_status(status):
+                        if isinstance(status, str):
+                            # Split string by commas and convert each part to an integer
+                            parts = [int(x.strip()) for x in status.split(',') if x.strip().isdigit()]
+                            return max(parts) if parts else 0
+                        elif isinstance(status, list):
+                            # Convert each element to an integer and take the max
+                            return max(int(x) for x in status if isinstance(x, int))
+                        else:
+                            return int(status)
+                        
+                    current_row_status = parse_phase_status(current_row_status)
+                    prev_row_status = parse_phase_status(prev_row_status)
                     current_row_entrata = current_row['entrataCodaFase']
                     prev_row_entrata = prev_row['entrataCodaFase']
                     
@@ -133,20 +151,22 @@ def calculate_in_coda(df):
     
 def parse_value(val, default=['']):
     """General value parser to handle None, NaN, string, and list/array types."""
-    if val is None or (isinstance(val, float) and np.isnan(val)):
-        return default
-    if isinstance(val, str):
-        try:
-            parsed_val = ast.literal_eval(val)
-            if not isinstance(parsed_val, list):
-                parsed_val = [parsed_val]
-            return parsed_val
-        except Exception:
+    try:
+        if val is None or (isinstance(val, float) and np.isnan(val)):
             return default
-    if isinstance(val, (list, np.ndarray)):
-        return list(val) if isinstance(val, np.ndarray) else val
-    return [val]
-
+        if isinstance(val, str):
+            try:
+                parsed_val = ast.literal_eval(val)
+                if not isinstance(parsed_val, list):
+                    parsed_val = [parsed_val]
+                return parsed_val
+            except Exception:
+                return default
+        if isinstance(val, (list, np.ndarray)):
+            return list(val) if isinstance(val, np.ndarray) else val
+        return [val]
+    except Exception:
+        print("Error while parsing")
 def map_in_coda_at_value(val, id_to_name):
     """Map 'inCodaAt' values during parsing."""
     return map_in_coda_at(val, id_to_name)
@@ -175,6 +195,7 @@ def parse_entrata_coda_fase(val):
             parsed_val = eval(entrata_coda_fase_str, {"dt": datetime})
             return parsed_val if isinstance(parsed_val, list) else [parsed_val]
         except Exception:
+            print("Exception while parsing dataEntrataCoda")
             return ['']
     return parse_value(val)
 
@@ -228,6 +249,7 @@ def format_queue_entry_time(value):
 
 def parse_columns(row, columns_to_parse, id_to_name):
     """Parse specific columns and handle mappings."""
+    print("Parsing columns")
     parsed_columns = {}
     for col in columns_to_parse:
         val = row.get(col)

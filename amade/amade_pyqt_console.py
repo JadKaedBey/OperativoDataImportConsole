@@ -54,6 +54,8 @@ def connect_to_mongodb(username, password):
             client = MongoClient(os.getenv("DEMO_URI"))
         elif username == "demoveloce" and password == "demoveloce":
             client = MongoClient(os.getenv("DEMO_VELOCE_URI"))
+        elif username == "launch" and password == "launch":
+            client = MongoClient(os.getenv("LAUNCH_URI"))
         else:
             print("Invalid credentials")
             return False

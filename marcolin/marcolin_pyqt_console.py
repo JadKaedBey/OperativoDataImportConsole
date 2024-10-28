@@ -839,7 +839,7 @@ class MainWindow(QMainWindow):
         # self.clear_button = QPushButton("Clear Queued Data")
         # self.upload_button = QPushButton("Upload Queued Data")
         # self.upload_button.setStyleSheet("background-color: green; color: white;")
-        self.upload_orders_button_amade = QPushButton("Upload Orders Amade")
+        self.upload_orders_button_amade = QPushButton("Upload Orders")
         self.upload_famiglie_button = QPushButton("Upload Flussi (Famiglie)")
         self.upload_famiglie_button.setStyleSheet("background-color: red; color: white;")
         self.export_button = QPushButton("Export Data")

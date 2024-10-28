@@ -6,4 +6,3 @@ qrcode
 python-dotenv
 openpyxl
 numpy
-dotenv

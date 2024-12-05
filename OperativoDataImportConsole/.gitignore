@@ -1,7 +1,0 @@
-# .gitignore
-.env
-venv/
-build/
-dist/
-QRs/
-Order Qrs/

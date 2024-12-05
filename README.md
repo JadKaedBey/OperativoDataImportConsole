@@ -31,7 +31,7 @@ run.bat
 ### Screenshots
 
 Login:
-[Login Screen](/res/login.png)
+![Login Screen](/res/login.png)
 
 ![Main Screen](/res/main.png)
 

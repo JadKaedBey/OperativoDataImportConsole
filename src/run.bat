@@ -12,7 +12,6 @@ REM Install required packages
 echo Installing required packages...
 pip install -r requirements.txt
 
+echo Finished installing required packages
 REM Run the Python script
-python marcolin_pyqt_console.py
-
-
+python operativo_pyqt_console.py

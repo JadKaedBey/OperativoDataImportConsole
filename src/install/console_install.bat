@@ -29,7 +29,7 @@ REM Delete the ZIP file
 del /Q %REPO_NAME%.zip
 
 REM Remove all files and folders except "src" folder
-echo Deleting everything except the amade folder...
+echo Deleting everything except the src folder...
 for /D %%d in (%TARGET_DIR%\*) do (
     if /I "%%~nxd" neq "src" rd /S /Q "%%d"
 )

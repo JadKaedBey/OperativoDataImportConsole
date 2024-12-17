@@ -65,7 +65,7 @@ from models.famigliaModel import (
 from pydantic import ValidationError
 
 queued_df = pd.DataFrame()
-client = None  # Initialize MongoDB client variable
+client = None  
 try:
     logo = Image.open(r".\resources\OPERATIVO_L_Main_Color.png")
 except FileNotFoundError:
@@ -107,7 +107,7 @@ def connect_to_mongodb(username, password):
         temp_client = MongoClient(initial_uri)
         db = temp_client.get_database(
             "aziende"
-        )  # Replace with the actual initial database name
+        )  
         collection = db[username]
 
         # Fetch the document containing the actual connection details
@@ -119,14 +119,13 @@ def connect_to_mongodb(username, password):
 
         # Extract the connection string from the document and replace the username/password placeholders
         conn_string = user_doc.get("stringaConn")
+        print(conn_string)
         if conn_string:
             conn_string = conn_string.replace("<username>", user_doc["usernameConn"])
             conn_string = conn_string.replace("<password>", user_doc["passwordConn"])
 
-            # Drop the `/<database>` part from the connection string if it exists
             conn_string = conn_string.split("/<database>")[0] + "/"
 
-            # Set up the global client with the modified connection string
             client = MongoClient(conn_string)
             print("Connected to MongoDB with updated credentials")
             return True
@@ -360,19 +359,19 @@ def safe_parse_literal(cell):
         return [cell]  # Fallback: return the cell as a single-item list
 
 
-def create_json_for_flowchart(df):
+def create_json_for_flowchart(df, codice, descrizione):
     # Generate unique element IDs for each phase
     elements = {}
     connections = {}
 
     # Iterate through the rows to create elements and connections
     for _, row in df.iterrows():
-        phase_id = str(ObjectId())  # Generate a unique ID for each phase
-        phase_key = str(row["ID fase"])  # Ensure the key is a string
+        phase_id = str(ObjectId()) 
+        phase_key = str(row["ID fase"]) 
         elements[phase_key] = {
             "id": phase_id,
-            "positionDx": 101.2 + 200 * int(row["ID fase"]),  # Adjust Dx dynamically
-            "positionDy": 240.2,  # Static positioning (can be adjusted further)
+            "positionDx": 101.2 + 200 * int(row["ID fase"]),  
+            "positionDy": 240.2, 
             "size.width": 100.0,
             "size.height": 50.0,
             "text": row["FaseOperativo"],
@@ -387,9 +386,9 @@ def create_json_for_flowchart(df):
             "borderColor": 4293336434,
             "borderThickness": 3.0,
             "elevation": 4.0,
-            "next": [],  # Connections will be added here later
-            "phaseDuration": 0,  # Placeholder for duration
-            "phaseTargetQueue": 0,  # Placeholder for target queue
+            "next": [], 
+            "phaseDuration": row['Tempo Ciclo'], 
+            "phaseTargetQueue": 0,  
         }
 
         # Parse `ID fase successiva` and `Fase successiva` for connections
@@ -445,8 +444,8 @@ def create_json_for_flowchart(df):
     # Build the final JSON structure
     json_output = {
         "_id": ObjectId(),
-        "titolo": df.iloc[0]["Codice"],  # Use the first row's "Codice" as the title
-        "descrizione": df.iloc[0]["Descrizione"],  # Use the first row's "Descrizione"
+        "titolo": codice, 
+        "descrizione": descrizione,
         "image": "https://upload.wikimedia.org/wikipedia/commons/1/14/No_Image_Available.jpg",
         "dashboard": {
             "elements": dashboard_elements,
@@ -1189,8 +1188,7 @@ class MainWindow(QMainWindow):
                             )
                             continue
                         else:
-                            json_object = create_json_for_flowchart(df)
-                            # Upload JSON object directly to MongoDB
+                            json_object = create_json_for_flowchart(df, codice, group["Descrizione"])
                             db_name = "process_db"
                             collection_name = "famiglie_di_prodotto"
                             db = client[db_name]

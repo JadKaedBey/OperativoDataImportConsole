@@ -13,7 +13,7 @@ def update_phase_status(similar_order_id, codice_articolo, current_phase):
     # Connect to MongoDB
     client = MongoClient(os.getenv("AMADE_URI"))
     db = client['orders_db']
-    collection = db['ordini']
+    collection = db["newOrdini"]
 
     # Append a wildcard to the similar_order_id to match any suffix
     regex_order_id = f"{re.escape(similar_order_id)}."

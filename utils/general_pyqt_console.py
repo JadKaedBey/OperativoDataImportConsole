@@ -241,7 +241,7 @@ def map_phases(phase_string):
 def upload_orders_from_xlsx_amade(xlsx_path):
     global client  # Ensure using the global MongoDB client
     db = client['orders_db']
-    collection = db['ordini']
+    collection = db["newOrdini"]
     nesting_collection = db['nesting']
 
     # Load the Excel file
@@ -631,7 +631,7 @@ class MainWindow(QMainWindow):
 
         try:
             db = client['orders_db']
-            collection = db['ordini']
+            collection = db["newOrdini"]
             for document in collection.find():
                 order_id = document.get('orderId', 'UnknownOrderID')
                 codice_articolo = document.get('codiceArticolo', 'UnknownCode')

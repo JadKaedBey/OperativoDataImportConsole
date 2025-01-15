@@ -37,7 +37,9 @@ import ast
 # (Assumendo che i file "newOrder_insert_utils.py" e "newOrder_model.py" siano nel path)
 from newOrder_insert_utils import build_order_new_model_backwards  # <-- Nuova funzione di calcolo/inserimento
 from models.newOrder_model import NewOrderModel, PhaseModel      # <-- Nuovi modelli
-
+from report_utils import save_report_to_file
+from report_utils import show_upload_report
+from report_utils import show_family_upload_report
 # Se serve ancora qualche funzione per import (tipo "subtractWorkingMinutes" ecc.),
 # le importerai da newOrder_insert_utils
 # ------------------------------------------------
@@ -356,13 +358,16 @@ def upload_orders_from_xlsx(self):
     for fam in famiglia_cursor:
         dash = fam.get("dashboard", {})
         cat = fam.get("catalogo", [])
+        phases_elements = dash.get("elements", [])
+        phase_names = [element.get("text", "") for element in phases_elements]
         # Per ogni item in catalogo, aggancio "famiglia" e "dashboard"
         for item in cat:
             cod = item["prodId"]
             prodId_to_catalog_info[cod] = {
                 "family": fam,
                 "dashboard": dash,
-                # ... eventuali altre info che servono
+                "catalog_item": item,
+                "phases": phase_names,
             }
 
     for idx, row in orders_df.iterrows():
@@ -437,69 +442,6 @@ def upload_orders_from_xlsx(self):
         f"{len(skipped_orders)} orders skipped."
     )
     show_upload_report(successful_orders, failed_orders, skipped_orders)
-
-
-def show_upload_report(successful_orders, failed_orders, skipped_orders):
-    report_message = "Upload Report:\n\n"
-
-    if successful_orders:
-        report_message += "Successfully uploaded orders:\n"
-        report_message += "\n".join([str(order) for order in successful_orders]) + "\n\n"
-
-    if failed_orders:
-        report_message += "Failed to upload orders:\n"
-        for failed in failed_orders:
-            codice_articolo = failed.get("codiceArticolo", "Unknown")
-            report_message += (
-                f"Order ID: {failed['ordineId']}, "
-                f"Codice Articolo: {codice_articolo}, "
-                f"Reason: {failed['reason']}\n"
-            )
-
-    if skipped_orders:
-        report_message += "Skipped orders (already in database):\n"
-        report_message += "\n".join(skipped_orders) + "\n\n"
-
-    QMessageBox.information(None, "Upload Report", report_message)
-    save_report_to_file(report_message, "orders")
-
-
-def save_report_to_file(report_content, report_type):
-    if not os.path.exists("./reports"):
-        os.makedirs("./reports")
-
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"{report_type}_report_{timestamp}.txt"
-    file_path = os.path.join("reports", filename)
-
-    try:
-        with open(file_path, "w", encoding="utf-8") as file:
-            file.write(report_content)
-        print(f"Report saved to {file_path}")
-    except Exception as e:
-        print(f"Failed to save report: {e}")
-
-
-def show_family_upload_report(successful_families, failed_families, skipped_families):
-    report_message = "Upload Report:\n\n"
-
-    if successful_families:
-        report_message += "Successfully uploaded Families:\n"
-        report_message += "\n".join([str(family) for family in successful_families]) + "\n\n"
-
-    if failed_families:
-        report_message += "Failed to upload Families:\n"
-        for failed in failed_families:
-            report_message += (
-                f"Famiglia: {failed['Family']}, Reason: {failed['Reason']}\n"
-            )
-
-    if skipped_families:
-        report_message += "Skipped families (already in database):\n"
-        report_message += "\n".join(skipped_families) + "\n\n"
-
-    QMessageBox.information(None, "Upload Report", report_message)
-    save_report_to_file(report_message, "families")
 
 
 class LoginWindow(QDialog):
@@ -1131,6 +1073,28 @@ class MainWindow(QMainWindow):
                 report_message += error_detail + "\n"
 
         save_report_to_file(report_message, "articoli")
+
+    def wipe_database(self):
+        print("Attempting to wipe database...")
+        reply = QMessageBox.question(
+            self,
+            "Confirm Wipe",
+            "Are you sure you want to wipe the database?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if reply == QMessageBox.Yes:
+            try:
+                db = client["processes_db"]
+                collection = db["macchinari"]
+                collection.delete_many({})
+                self.clear_data()
+                QMessageBox.information(self, "Success", "The database has been wiped.")
+            except Exception as e:
+                print(f"Error wiping database: {e}")
+                QMessageBox.critical(
+                    self, "Wipe Failed", f"Failed to wipe database: {e}"
+                )
 
 
 if __name__ == "__main__":

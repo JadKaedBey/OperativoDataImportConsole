@@ -4,6 +4,8 @@ from typing import Any, Dict, List, Optional
 from pymongo import MongoClient
 from bson import ObjectId
 
+from date_utils import subtractWorkingMinutes
+
 def fetch_flowchart_data(client: MongoClient, codice_articolo: str):
     """
     Recupera il flowchart (dashboard) della famiglia di prodotto
@@ -133,84 +135,6 @@ def traverse_backwards(
     return dfs(end_node)
 
 
-def subtractWorkingMinutes(
-    end_date: datetime,
-    total_minutes: float,
-    start_work: time,
-    end_work: time,
-    holiday_list: List[Dict[str, Any]],
-    lunch_start: time,
-    lunch_end: time,
-    pausa_duration: timedelta,
-) -> datetime:
-    """
-    Sottrae 'total_minutes' minuti lavorativi dalla 'end_date'.
-    Rispetta orari di lavoro, pause pranzo, weekend e ferie.
-    Esempio di implementazione presa dal tuo snippet.
-    """
-    current_date = end_date
-    minutes_remaining = total_minutes
-
-    # Calcolo minuti lavorativi giornalieri:
-    # (chiusura - apertura) - pausa pranzo
-    working_minutes_per_day = (
-        datetime.combine(datetime.min, end_work)
-        - datetime.combine(datetime.min, start_work)
-        - pausa_duration
-    ).total_seconds() / 60
-
-    while minutes_remaining > 0:
-        # Vado al giorno precedente (inizio giornata)
-        current_date -= timedelta(days=1)
-
-        # Skip weekend (sabato=5, domenica=6)
-        if current_date.weekday() >= 5:
-            continue
-
-        # Skip holidays
-        is_holiday = False
-        for hol in holiday_list:
-            # ipotizziamo che holiday_list contenga oggetti con "inizio" e "fine"
-            # come datetime
-            inizio = hol["inizio"]
-            fine = hol["fine"]
-            if inizio.date() <= current_date.date() <= fine.date():
-                is_holiday = True
-                break
-        if is_holiday:
-            continue
-
-        # Se i minuti da sottrarre >= minuti lavorativi di un giorno
-        if minutes_remaining >= working_minutes_per_day:
-            minutes_remaining -= working_minutes_per_day
-        else:
-            # Rimangono meno minuti di un'intera giornata
-            minutes_to_subtract_today = minutes_remaining
-
-            # Inizio della giornata lavorativa
-            current_date = current_date.replace(
-                hour=start_work.hour,
-                minute=start_work.minute,
-                second=0,
-                microsecond=0
-            )
-            # Aggiungo i minuti da sottrarre (che in realtà vado indietro nel tempo)
-            current_date += timedelta(minutes=minutes_to_subtract_today)
-
-            minutes_remaining = 0
-            return current_date
-
-        # Finito di usare questa giornata, mi porto a inizio giornata
-        current_date = current_date.replace(
-            hour=start_work.hour,
-            minute=start_work.minute,
-            second=0,
-            microsecond=0
-        )
-
-    return current_date
-
-
 def get_family_title(client: MongoClient, codice_articolo: str) -> Optional[str]:
     """
     Restituisce il titolo della famiglia di prodotto legata a 'codice_articolo'.
@@ -221,9 +145,7 @@ def get_family_title(client: MongoClient, codice_articolo: str) -> Optional[str]
     family = collection.find_one({"catalogo.prodId": codice_articolo})
 
     if not family:
-        return None
-
-    # ipotizziamo che la famiglia abbia un campo 'titolo'
+        raise ValueError("famiglia non trovata")
     return family.get("titolo", None)
 
 def get_phase_text_from_dashboard(dashboard: dict, node_id: str) -> str:
@@ -420,7 +342,7 @@ def build_order_new_model_backwards(
         order_deadline = max(p["finishDate"] for p in phases_list)
 
     # ----- 9) Recupero il nome/famiglia di prodotto (opzionale) -----
-    famiglia_di_prodotto = get_family_title(client, codice_articolo) or "???"
+    famiglia_di_prodotto = get_family_title(client, codice_articolo)
 
     new_order_document = {
         "_id": ObjectId(),

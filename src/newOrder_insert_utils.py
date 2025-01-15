@@ -210,7 +210,9 @@ def build_order_new_model_backwards(
         cycle_time = durations.get(end_node, 0) * quantity
         raw_phase_name = get_phase_text_from_dashboard(dashboard, end_node)
         phase_name_key = raw_phase_name.strip().lower()
-        queue_time = queues.get(phase_name_key, 0)
+        queue_time = queues.get(end_node, 0)
+        print("queueTime per fase")
+        print(queue_time)
 
 
         queue_insert = subtractWorkingMinutes(
@@ -260,11 +262,11 @@ def build_order_new_model_backwards(
 
                     # 2) queueInsertDate[pred] = finishDate[pred] - (queueTime)
                     cycle_time = durations.get(pred, 0) * quantity
-                    queue_time = queues.get(phase_name_key, 0)
+                    queue_time = queues.get(pred, 0)
 
                     queue_insert = subtractWorkingMinutes(
                         finish_date_map[pred],
-                        cycle_time + queue_time,
+                        queue_time,
                         time(open_time["ore"], open_time["minuti"]),
                         time(close_time["ore"], close_time["minuti"]),
                         holiday_list,

@@ -1083,6 +1083,7 @@ class MainWindow(QMainWindow):
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No,
         )
+        
         if reply == QMessageBox.Yes:
             try:
                 db = client["processes_db"]

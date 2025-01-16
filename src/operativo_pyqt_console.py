@@ -31,7 +31,8 @@ from bson import ObjectId
 from dotenv import load_dotenv
 from functools import reduce
 import numpy as np
-import ast
+from family_insert_utils import create_json_for_flowchart, safe_parse_literal, show_family_upload_report
+
 
 # -------------- NUOVE IMPORTAZIONI -------------
 # (Assumendo che i file "newOrder_insert_utils.py" e "newOrder_model.py" siano nel path)
@@ -39,7 +40,7 @@ from newOrder_insert_utils import build_order_new_model_backwards  # <-- Nuova f
 from models.newOrder_model import NewOrderModel, PhaseModel      # <-- Nuovi modelli
 from report_utils import save_report_to_file
 from report_utils import show_upload_report
-from report_utils import show_family_upload_report
+
 # Se serve ancora qualche funzione per import (tipo "subtractWorkingMinutes" ecc.),
 # le importerai da newOrder_insert_utils
 # ------------------------------------------------
@@ -98,6 +99,18 @@ load_dotenv()  # Load environment variables from .env file
 
 uri = "mongodb+srv://OperativoLogin:<db_password>@loginaziende.4fpi2ex.mongodb.net/?retryWrites=true&w=majority&appName=loginAziende"
 
+def fetchMacchinari():
+    db = client["process_db"]
+    macchinari_collection = db["macchinari"]
+    macchinari_names = macchinari_collection.find({}, {"_id": 0, "name": 1})
+    macchinari_list = [item["name"] for item in macchinari_names]
+    return macchinari_list
+
+def check_family_existance_db(familyName):
+    process_db = client["process_db"]
+    famiglie_di_prodotto = process_db["famiglie_di_prodotto"]
+    family = famiglie_di_prodotto.find_one({"titolo": familyName})
+    return bool(family)
 
 def connect_to_mongodb(username, password):
     global client
@@ -133,7 +146,6 @@ def connect_to_mongodb(username, password):
         print(f"Error connecting to MongoDB: {e}")
         return False
 
-
 def fetchSettings():
     global client
     db = client["azienda"]
@@ -143,137 +155,6 @@ def fetchSettings():
         raise ValueError("No settings document found")
     return settings
 
-
-def fetchMacchinari():
-    global client
-    db = client["process_db"]
-    macchinari_collection = db["macchinari"]
-    macchinari_names = macchinari_collection.find({}, {"_id": 0, "name": 1})
-    macchinari_list = [item["name"] for item in macchinari_names]
-    return macchinari_list
-
-
-def check_family_existance_db(familyName):
-    process_db = client["process_db"]
-    famiglie_di_prodotto = process_db["famiglie_di_prodotto"]
-    family = famiglie_di_prodotto.find_one({"titolo": familyName})
-    return bool(family)
-
-
-def safe_parse_literal(cell):
-    import re
-    try:
-        if isinstance(cell, str):
-            cell = cell.strip()
-            if cell.startswith("[") and cell.endswith("]"):
-                parsed_list = ast.literal_eval(cell)
-                return [
-                    (int(item) if isinstance(item, (int, str)) and str(item).isdigit() else item)
-                    for item in parsed_list
-                ]
-            elif "," in cell:
-                return [
-                    int(item.strip()) if item.strip().isdigit() else item.strip()
-                    for item in cell.split(",")
-                ]
-            elif cell.isdigit():
-                return [int(cell)]
-            else:
-                return [cell]
-        elif isinstance(cell, (int, float)):
-            return [cell]
-        else:
-            return [cell]
-    except (ValueError, SyntaxError) as e:
-        print(f"Error parsing cell: {repr(cell)} - {e}")
-        return [cell]
-
-
-def create_json_for_flowchart(df, codice, descrizione):
-    elements = {}
-    connections = {}
-
-    for _, row in df.iterrows():
-        phase_id = str(ObjectId())
-        phase_key = str(row["ID fase"])
-        elements[phase_key] = {
-            "id": phase_id,
-            "positionDx": 101.2 + 200 * int(row["ID fase"]),
-            "positionDy": 240.2,
-            "size.width": 100.0,
-            "size.height": 50.0,
-            "text": row["FaseOperativo"],
-            "textColor": 4278190080,
-            "fontFamily": None,
-            "textSize": 12.0,
-            "textIsBold": False,
-            "kind": 0,
-            "handlers": [3, 2],
-            "handlerSize": 15.0,
-            "backgroundColor": 4294967295,
-            "borderColor": 4293336434,
-            "borderThickness": 3.0,
-            "elevation": 4.0,
-            "next": [],
-            "phaseDuration": row["Tempo Ciclo"],
-            "phaseTargetQueue": 0,
-        }
-
-        next_ids = safe_parse_literal(row["ID fase successiva"])
-        next_phases = safe_parse_literal(row["Fase successiva"])
-        for nid, nphase in zip(next_ids, next_phases):
-            connections.setdefault(phase_key, []).append((str(nid), nphase))
-
-    dashboard_elements = []
-    for phase_id, element in elements.items():
-        for next_id, _ in connections.get(phase_id, []):
-            if next_id in elements:
-                element["next"].append(
-                    {
-                        "destElementId": elements[next_id]["id"],
-                        "arrowParams": {
-                            "thickness": 1.7,
-                            "headRadius": 6.0,
-                            "tailLength": 25.0,
-                            "color": 4278190080,
-                            "style": 0,
-                            "tension": 1.0,
-                            "startArrowPositionX": 1.0,
-                            "startArrowPositionY": 0.0,
-                            "endArrowPositionX": -1.0,
-                            "endArrowPositionY": 0.0,
-                        },
-                        "pivots": [],
-                    }
-                )
-        dashboard_elements.append(element)
-
-    json_output = {
-        "_id": ObjectId(),
-        "titolo": codice,
-        "descrizione": descrizione,
-        "image": "https://upload.wikimedia.org/wikipedia/commons/1/14/No_Image_Available.jpg",
-        "dashboard": {
-            "elements": dashboard_elements,
-            "dashboardSizeWidth": 1279.0,
-            "dashboardSizeHeight": 566.72,
-            "gridBackgroundParams": {
-                "offset.dx": -580.4256299112267,
-                "offset.dy": -150.19796474249733,
-                "scale": 1.0,
-                "gridSquare": 20.0,
-                "gridThickness": 0.7,
-                "secondarySquareStep": 5,
-                "backgroundColor": 4294967295,
-                "gridColor": 520093696,
-            },
-            "blockDefaultZoomGestures": False,
-            "minimumZoomFactor": 0.25,
-            "arrowStyle": 0,
-        },
-    }
-
-    return json_output
 
 
 def excel_date_parser(date_str):
@@ -403,15 +284,14 @@ def upload_orders_from_xlsx(self):
             })
             continue
 
-        # Provo a costruire il "nuovo ordine" con la nuova funzione
         try:
             new_order_doc = build_order_new_model_backwards(
                 client=client,
                 codice_articolo=codiceArticolo,
-                descrizione=infoAggiuntive or "",  # short description
+                descrizione=infoAggiuntive or "",
                 quantity=int(qta),
                 order_id=ordineId,
-                customer_deadline=dataRichiesta,  # scadenza cliente
+                customer_deadline=dataRichiesta,
                 open_time=open_time,
                 close_time=close_time,
                 holiday_list=holiday_list,
@@ -650,6 +530,7 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Operation Failed", f"Failed to generate order QR codes: {e}")
 
+
     def generate_order_qr_with_text(self, data, full_path, order_id, codice_articolo, quantita):
         qr = qrcode.QRCode(
             version=1,
@@ -683,80 +564,6 @@ class MainWindow(QMainWindow):
 
     def upload_orders(self):
         upload_orders_from_xlsx(self)
-
-    def uploadFamiglie(self):
-        file_path, _ = QFileDialog.getOpenFileName(
-            self, "Open Excel File", "", "Excel files (*.xlsx)"
-        )
-        if not file_path:
-            QMessageBox.warning(self, "File Selection", "No file selected.")
-            return
-        if not file_path.endswith(".xlsx"):
-            QMessageBox.critical(self, "File Error", "The selected file is not an Excel file.")
-            return
-        try:
-            df = pd.read_excel(file_path, sheet_name="Famiglie")
-        except Exception as e:
-            QMessageBox.critical(self, "File Error", f"Failed to read the Excel file: {e}")
-            return
-
-        successful_families = []
-        skipped_families = []
-        failed_families = []
-
-        required_columns = {
-            "ID fase",
-            "FaseOperativo",
-            "ID fase successiva",
-            "Fase successiva",
-            "Codice",
-            "FaseOperativo",
-            "Tempo Ciclo",
-            "Descrizione",
-        }
-        if not required_columns.issubset(df.columns):
-            missing_columns = required_columns - set(df.columns)
-            QMessageBox.critical(
-                self,
-                "File Error",
-                "Missing required columns: " + ", ".join(missing_columns),
-            )
-            return
-
-        try:
-            for codice, group in df.groupby("Codice"):
-                if check_family_existance_db(codice):
-                    print(f"Family: {codice} already present in DB")
-                    skipped_families.append(codice)
-                    continue
-                else:
-                    try:
-                        fasi = group["FaseOperativo"].tolist()
-                        macchinari_list = fetchMacchinari()
-                        missing_phases = [fase for fase in fasi if fase not in macchinari_list]
-                        if missing_phases:
-                            failed_families.append({
-                                "Family": f"{codice}",
-                                "Reason": f"Fasi non presenti in DB macchinari: {missing_phases}"
-                            })
-                            continue
-                        else:
-                            json_object = create_json_for_flowchart(group, codice, group["Descrizione"])
-                            db_name = "process_db"
-                            collection_name = "famiglie_di_prodotto"
-                            db = client[db_name]
-                            collection = db[collection_name]
-                            collection.insert_one(json_object)
-                            successful_families.append(codice)
-                    except Exception as e:
-                        print(f"Error encountered with family {codice}: {e}")
-                        failed_families.append({"Family": codice, "Reason": str(e)})
-
-            show_family_upload_report(successful_families, failed_families, skipped_families)
-
-        except Exception as e:
-            print(f"Error encountered: {e}")
-            failed_families.append(f"Failed to process: {e}")
 
     def select_database_and_collection(self):
         databases = client.list_database_names()
@@ -937,6 +744,92 @@ class MainWindow(QMainWindow):
         except Exception as e:
             print(f"Error exporting data: {e}")
             QMessageBox.critical(self, "Export Failed", f"Failed to export data: {e}")
+
+    def uploadFamiglie(self):
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "Open Excel File", "", "Excel files (*.xlsx)"
+        )
+        if not file_path:
+            QMessageBox.warning(self, "File Selection", "No file selected.")
+            return
+        if not file_path.endswith(".xlsx"):
+            QMessageBox.critical(self, "File Error", "The selected file is not an Excel file.")
+            return
+        try:
+            df = pd.read_excel(file_path, sheet_name="Famiglie")
+        except Exception as e:
+            QMessageBox.critical(self, "File Error", f"Failed to read the Excel file: {e}")
+            return
+
+        successful_families = []
+        skipped_families = []
+        failed_families = []
+
+        required_columns = {
+            "ID fase",
+            "FaseOperativo",
+            "ID fase successiva",
+            "Fase successiva",
+            "Codice",
+            "FaseOperativo",
+            "Tempo Ciclo",
+            "Descrizione",
+        }
+        if not required_columns.issubset(df.columns):
+            missing_columns = required_columns - set(df.columns)
+            QMessageBox.critical(
+                self,
+                "File Error",
+                "Missing required columns: " + ", ".join(missing_columns),
+            )
+            return
+
+        try:
+            for codice, group in df.groupby("Codice"):
+                if check_family_existance_db(codice):
+                    print(f"Family: {codice} already present in DB")
+                    skipped_families.append(codice)
+                    continue
+                else:
+                    try:
+                        fasi = group["FaseOperativo"].tolist()
+                        macchinari_list = fetchMacchinari()
+                        missing_phases = [fase for fase in fasi if fase not in macchinari_list]
+                        if missing_phases:
+                            failed_families.append({
+                                "Family": f"{codice}",
+                                "Reason": f"Fasi non presenti in DB macchinari: {missing_phases}"
+                            })
+                            continue
+                        else:
+                            # Controlla che ci sia un solo valore nella colonna "Descrizione" per questo gruppo
+                            if group["Descrizione"].nunique() > 1:
+                                failed_families.append({
+                                    "Family": f"{codice}",
+                                    "Reason": f"Ci sono più descrizioni diverse nel gruppo per '{codice}'."
+                                })
+                                continue
+
+                            # Prendi il primo (e unico) valore
+                            descrizione_value = group["Descrizione"].iloc[0]
+
+                            json_object = create_json_for_flowchart(group, codice, descrizione_value)
+                            db_name = "process_db"
+                            collection_name = "famiglie_di_prodotto"
+                            db = client[db_name]
+                            collection = db[collection_name]
+                            collection.insert_one(json_object)
+                            successful_families.append(codice)
+                    except Exception as e:
+                        print(f"Error encountered with family {codice}: {e}")
+                        failed_families.append({"Family": codice, "Reason": str(e)})
+
+            show_family_upload_report(successful_families, failed_families, skipped_families)
+
+        except Exception as e:
+            print(f"Error encountered: {e}")
+            failed_families.append(f"Failed to process: {e}")
+
 
     def upload_articoli(self):
         file_path, _ = QFileDialog.getOpenFileName(

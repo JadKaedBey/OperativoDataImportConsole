@@ -180,7 +180,7 @@ def create_order_object_with_dates(phases, codice_articolo, quantita, order_id, 
 
 def upload_order_to_db(order_object):
     db = client['orders_db']
-    collection = db['ordini']
+    collection = db["newOrdini"]
     
     result = collection.insert_one(order_object)
     

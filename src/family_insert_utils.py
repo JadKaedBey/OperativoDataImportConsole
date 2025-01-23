@@ -24,19 +24,104 @@ def custom_list_parser(cell_value):
         return []
 
 def create_json_for_flowchart(df, codice, descrizione):
+    """
+    Crea un oggetto JSON pronto per il DB partendo dal DataFrame `df`,
+    cercando di convertire i valori ricevuti nel tipo desiderato.
+    Se non è possibile convertire un valore, solleva ValueError.
+    """
+
+    # 1) Tenta di convertire 'codice' e 'descrizione' a stringa.
+    #    Se fallisce, solleva ValueError.
+    try:
+        codice = str(codice)
+    except Exception:
+        raise ValueError(f"'codice' non convertibile in stringa, ricevuto: {type(codice)}")
+
+    try:
+        descrizione = str(descrizione)
+    except Exception:
+        raise ValueError(f"'descrizione' non convertibile in stringa, ricevuto: {type(descrizione)}")
+
     elements = {}
     connections = {}
 
-    for _, row in df.iterrows():
+    # Scorriamo le righe del DataFrame
+    for i, row in df.iterrows():
+
+        # 2) Convertiamo "FaseOperativo" a stringa
+        try:
+            fase_operativo = str(row["FaseOperativo"])
+        except Exception:
+            raise ValueError(
+                f"Riga {i}: 'FaseOperativo' non convertibile in stringa, "
+                f"trovato: {row['FaseOperativo']} di tipo {type(row['FaseOperativo'])}"
+            )
+
+        # 3) Convertiamo "Tempo Ciclo" a int (tramite float), perché in seguito lo usiamo come int
+        try:
+            tempo_ciclo = int(float(row["Tempo Ciclo"]))
+        except Exception:
+            raise ValueError(
+                f"Riga {i}: 'Tempo Ciclo' non convertibile in intero, "
+                f"trovato: {row['Tempo Ciclo']} di tipo {type(row['Tempo Ciclo'])}"
+            )
+
+        # 4) Convertiamo "ID fase" in int per calcoli di posizione, ma lo useremo
+        #    anche come chiave in formato stringa
+        try:
+            id_fase_int = int(float(row["ID fase"]))
+        except Exception:
+            raise ValueError(
+                f"Riga {i}: 'ID fase' non convertibile in intero, "
+                f"trovato: {row['ID fase']} di tipo {type(row['ID fase'])}"
+            )
+
+        phase_key = str(id_fase_int)
+
+        try:
+            next_ids_raw = custom_list_parser(row["ID fase successiva"])
+        except Exception:
+            raise ValueError(
+                f"Riga {i}: 'ID fase successiva' non è in un formato gestibile dalla funzione custom_list_parser."
+            )
+
+        try:
+            next_phases_raw = custom_list_parser(row["Fase successiva"])
+        except Exception:
+            raise ValueError(
+                f"Riga {i}: 'Fase successiva' non è in un formato gestibile dalla funzione custom_list_parser."
+            )
+
+        # Se vuoi convertire i next_ids in interi e next_phases in stringhe, lo fai qui:
+        next_ids = []
+        for val in next_ids_raw:
+            try:
+                next_ids.append(int(float(val)))
+            except Exception:
+                raise ValueError(
+                    f"Riga {i}: impossibile convertire '{val}' in int per 'ID fase successiva'."
+                )
+
+        next_phases = []
+        for val in next_phases_raw:
+            try:
+                next_phases.append(str(val))
+            except Exception:
+                raise ValueError(
+                    f"Riga {i}: impossibile convertire '{val}' in str per 'Fase successiva'."
+                )
+
+        # Creiamo un ObjectId per l'elemento
         phase_id = str(ObjectId())
-        phase_key = str(row["ID fase"])
+
+        # Popoliamo `elements`
         elements[phase_key] = {
             "id": phase_id,
-            "positionDx": 101.2 + 200 * int(row["ID fase"]),
+            "positionDx": float(101.2 + 200 * id_fase_int),
             "positionDy": 240.2,
             "size.width": 100.0,
             "size.height": 50.0,
-            "text": row["FaseOperativo"],
+            "text": fase_operativo,
             "textColor": 4278190080,
             "fontFamily": None,
             "textSize": 12.0,
@@ -49,39 +134,37 @@ def create_json_for_flowchart(df, codice, descrizione):
             "borderThickness": 3.0,
             "elevation": 4.0,
             "next": [],
-            "phaseDuration": row["Tempo Ciclo"],
-            "phaseTargetQueue": 0,
+            "phaseDuration": tempo_ciclo,
         }
 
-        next_ids = custom_list_parser(row["ID fase successiva"])
-        next_phases = custom_list_parser(row["Fase successiva"])
+        # Prepara le connessioni (non ancora collegate ai loro oggetti)
         for nid, nphase in zip(next_ids, next_phases):
             connections.setdefault(phase_key, []).append((str(nid), nphase))
 
+    # Adesso colleghiamo le "next" relazioni
     dashboard_elements = []
     for phase_id, element in elements.items():
         for next_id, _ in connections.get(phase_id, []):
             if next_id in elements:
-                element["next"].append(
-                    {
-                        "destElementId": elements[next_id]["id"],
-                        "arrowParams": {
-                            "thickness": 1.7,
-                            "headRadius": 6.0,
-                            "tailLength": 25.0,
-                            "color": 4278190080,
-                            "style": 0,
-                            "tension": 1.0,
-                            "startArrowPositionX": 1.0,
-                            "startArrowPositionY": 0.0,
-                            "endArrowPositionX": -1.0,
-                            "endArrowPositionY": 0.0,
-                        },
-                        "pivots": [],
-                    }
-                )
+                element["next"].append({
+                    "destElementId": elements[next_id]["id"],
+                    "arrowParams": {
+                        "thickness": 1.7,
+                        "headRadius": 6.0,
+                        "tailLength": 25.0,
+                        "color": 4278190080,
+                        "style": 0,
+                        "tension": 1.0,
+                        "startArrowPositionX": 1.0,
+                        "startArrowPositionY": 0.0,
+                        "endArrowPositionX": -1.0,
+                        "endArrowPositionY": 0.0,
+                    },
+                    "pivots": [],
+                })
         dashboard_elements.append(element)
 
+    # Costruiamo il JSON finale
     json_output = {
         "_id": ObjectId(),
         "titolo": codice,
@@ -106,8 +189,8 @@ def create_json_for_flowchart(df, codice, descrizione):
             "arrowStyle": 0,
         },
     }
-
     return json_output
+
 
 def safe_parse_literal(cell):
     try:

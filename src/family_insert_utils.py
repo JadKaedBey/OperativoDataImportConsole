@@ -96,7 +96,7 @@ def create_json_for_flowchart(df, codice, descrizione):
         next_ids = []
         for val in next_ids_raw:
             try:
-                next_ids.append(int(float(val)))
+                next_ids.append(str(val))
             except Exception:
                 raise ValueError(
                     f"Riga {i}: impossibile convertire '{val}' in int per 'ID fase successiva'."

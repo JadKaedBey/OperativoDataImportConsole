@@ -786,6 +786,10 @@ class MainWindow(QMainWindow):
 
         try:
             for codice, group in df.groupby("Codice"):
+                try:
+                    codice = str(codice)
+                except Exception:
+                    raise ValueError(f"'nome' non convertibile in stringa, ricevuto: {type(codice)}")
                 if check_family_existance_db(codice):
                     print(f"Family: {codice} already present in DB")
                     skipped_families.append(codice)

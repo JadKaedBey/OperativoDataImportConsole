@@ -3,10 +3,47 @@ import pandas as pd
 import ast
 from bson import ObjectId
 
+def custom_list_parser2(cell_value):
+    print(cell_value)
+
+    if (isinstance(cell_value, float) or isinstance(cell_value, int)) and not pd.isna(cell_value):
+        try:
+            cell_value = str(int(float(cell_value)))
+        except Exception:
+            raise ValueError(f"'codice' non convertibile in stringa, ricevuto: {type(cell_value)}")
+
+    if not isinstance(cell_value, str):
+        print("sono qui")
+        return []
+    
+    if cell_value.strip()=='':
+        return []
+
+    text = cell_value.strip()
+
+    # Se inizia e finisce con [ ]
+    if text.startswith("[") and text.endswith("]"):
+        text = text[1:-1].strip()
+        items = [x.strip() for x in text.split(",")]
+        items_quoted = [f'"{x}"' for x in items]
+        new_text = "[" + ", ".join(items_quoted) + "]"
+        try:
+            return ast.literal_eval(new_text)
+        except Exception as e:
+            print(f"Error parsing cell: {cell_value} => {new_text}, {e}")
+            return []
+    elif "," in text:
+        items = [x.strip() for x in text.split(",")]
+        return items
+    else:
+        print(text)
+        return [text]
+
 def custom_list_parser(cell_value):
     """
     Converte una stringa non valida come [Taglio, Pressopiega] in una lista Python valida: ["Taglio", "Pressopiega"].
     """
+    print(cell_value)
     if not isinstance(cell_value, str):
         return []
     text = cell_value.strip()
@@ -79,14 +116,14 @@ def create_json_for_flowchart(df, codice, descrizione):
         phase_key = str(id_fase_int)
 
         try:
-            next_ids_raw = custom_list_parser(row["ID fase successiva"])
-        except Exception:
+            next_ids_raw = custom_list_parser2(row["ID fase successiva"])
+        except Exception as e:
             raise ValueError(
-                f"Riga {i}: 'ID fase successiva' non è in un formato gestibile dalla funzione custom_list_parser."
+                f"Riga {i}: 'ID fase successiva' non è in un formato gestibile dalla funzione custom_list_parser {e}."
             )
 
         try:
-            next_phases_raw = custom_list_parser(row["Fase successiva"])
+            next_phases_raw = custom_list_parser2(row["Fase successiva"])
         except Exception:
             raise ValueError(
                 f"Riga {i}: 'Fase successiva' non è in un formato gestibile dalla funzione custom_list_parser."
@@ -99,7 +136,7 @@ def create_json_for_flowchart(df, codice, descrizione):
                 next_ids.append(str(val))
             except Exception:
                 raise ValueError(
-                    f"Riga {i}: impossibile convertire '{val}' in int per 'ID fase successiva'."
+                    f"Riga {i}: impossibile convertire '{val}' in int per 'ID fase successiva '."
                 )
 
         next_phases = []

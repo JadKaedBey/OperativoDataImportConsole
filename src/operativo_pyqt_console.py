@@ -834,7 +834,6 @@ class MainWindow(QMainWindow):
             print(f"Error encountered: {e}")
             failed_families.append(f"Failed to process: {e}")
 
-
     def upload_articoli(self):
         file_path, _ = QFileDialog.getOpenFileName(
             self, "Open Excel File", "", "Excel files (*.xlsx)"
@@ -854,8 +853,7 @@ class MainWindow(QMainWindow):
             return
 
         required_columns = {
-            "Codice Articolo", "Descrizione articolo", "Famiglia di prodotto",
-            "Fase Operativo", "Tempo Ciclo", "Info lavorazione"
+            "Codice Articolo", "Descrizione articolo", "Famiglia di prodotto"
         }
         
         if not required_columns.issubset(articoli_df.columns):
@@ -863,7 +861,6 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "File Error", f"Missing required columns: {', '.join(missing_columns)}")
             return
 
-        client = MongoClient()
         db = client["process_db"]
         collection = db["famiglie_di_prodotto"]
         family_dict = {family["titolo"]: family for family in collection.find()}
@@ -889,8 +886,10 @@ class MainWindow(QMainWindow):
             family = family_dict[famiglia_di_prodotto]
             catalogo = family.setdefault("catalogo", [])
 
-            if any(item["prodId"] == codice_articolo for item in catalogo):
-                continue  # Skip duplicate
+            if any(item.get("prodId") == codice_articolo for item in catalogo):
+                errors.append({"Codice Articolo": codice_articolo, "Reason": "Duplicate entry found."})
+                error_count += 1
+                continue
 
             elements = [{} for _ in family.get("dashboard", {}).get("elements", [])]
             catalogo.append({
@@ -906,9 +905,14 @@ class MainWindow(QMainWindow):
 
         for famiglia, family in family_dict.items():
             try:
-                collection.update_one({"_id": family["_id"]}, {"$set": {"catalogo": family["catalogo"]}})
+                collection.update_one(
+                    {"_id": family["_id"]}, {"$set": {"catalogo": family.get("catalogo", [])}}
+                )
             except Exception as e:
-                errors.append({"Famiglia di prodotto": famiglia, "Reason": f"Error updating database: {e}"})
+                errors.append({
+                    "Famiglia di prodotto": famiglia,
+                    "Reason": f"Error updating database: {e}",
+                })
                 error_count += 1
 
         summary_message = f"{success_count} articoli processed successfully, {error_count} errors."

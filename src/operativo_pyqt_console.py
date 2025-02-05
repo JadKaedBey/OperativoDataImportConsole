@@ -786,6 +786,10 @@ class MainWindow(QMainWindow):
 
         try:
             for codice, group in df.groupby("Codice"):
+                try:
+                    codice = str(codice)
+                except Exception:
+                    raise ValueError(f"'nome' non convertibile in stringa, ricevuto: {type(codice)}")
                 if check_family_existance_db(codice):
                     print(f"Family: {codice} already present in DB")
                     skipped_families.append(codice)
@@ -830,7 +834,6 @@ class MainWindow(QMainWindow):
             print(f"Error encountered: {e}")
             failed_families.append(f"Failed to process: {e}")
 
-
     def upload_articoli(self):
         file_path, _ = QFileDialog.getOpenFileName(
             self, "Open Excel File", "", "Excel files (*.xlsx)"
@@ -844,94 +847,66 @@ class MainWindow(QMainWindow):
             return
 
         try:
-            xls = pd.ExcelFile(file_path)
-            articoli_df = pd.read_excel(xls, sheet_name="Articoli")
+            articoli_df = pd.read_excel(file_path, sheet_name="Articoli")
         except Exception as e:
             QMessageBox.critical(self, "File Error", f"Failed to read the Excel file: {e}")
             return
 
         required_columns = {
-            "Codice Articolo",
-            "Descrizione articolo",
-            "Famiglia di prodotto",
-            "Fase Operativo",
-            "Tempo Ciclo",
-            "Info lavorazione",
+            "Codice Articolo", "Descrizione articolo", "Famiglia di prodotto"
         }
+        
         if not required_columns.issubset(articoli_df.columns):
             missing_columns = required_columns - set(articoli_df.columns)
-            QMessageBox.critical(
-                self,
-                "File Error",
-                "Missing required columns: " + ", ".join(missing_columns),
-            )
+            QMessageBox.critical(self, "File Error", f"Missing required columns: {', '.join(missing_columns)}")
             return
 
         db = client["process_db"]
         collection = db["famiglie_di_prodotto"]
-        families = list(collection.find())
-        family_dict = {}
-        for family in families:
-            family_dict[family["titolo"]] = family
+        family_dict = {family["titolo"]: family for family in collection.find()}
 
-        success_count = 0
-        error_count = 0
-        errors = []
-        processed_articoli = []
+        success_count, error_count = 0, 0
+        errors, processed_articoli = [], []
 
         for idx, row in articoli_df.iterrows():
             try:
-                articolo_data = row.to_dict()
-                articolo = codiceArticolo(**articolo_data)
-            except ValidationError as e:
+                codice_articolo = str(row["Codice Articolo"])
+                descrizione_articolo = str(row["Descrizione articolo"])
+                famiglia_di_prodotto = str(row["Famiglia di prodotto"])
+            except Exception as e:
+                errors.append({"Row": idx + 1, "Reason": f"Data conversion error: {e}"})
                 error_count += 1
-                errors.append({"Codice Articolo": "UNKNOWN", "Reason": str(e)})
                 continue
 
-            codice_articolo = row["Codice Articolo"]
-            descrizione_articolo = row["Descrizione articolo"]
-            famiglia_di_prodotto = row["Famiglia di prodotto"]
-            fase_operativo = row["Fase Operativo"]
-            tempo_ciclo = row["Tempo Ciclo"]
-            info_lavorazione = row["Info lavorazione"]
-
             if famiglia_di_prodotto not in family_dict:
-                error_message = f'Famiglia di prodotto "{famiglia_di_prodotto}" not found in database.'
-                errors.append({"Codice Articolo": codice_articolo, "Reason": error_message})
+                errors.append({"Codice Articolo": codice_articolo, "Reason": f'Famiglia di prodotto "{famiglia_di_prodotto}" not found in database.'})
                 error_count += 1
                 continue
 
             family = family_dict[famiglia_di_prodotto]
-            catalogo = family.get("catalogo")
-            if catalogo is None:
-                catalogo = []
-                family["catalogo"] = catalogo
+            catalogo = family.setdefault("catalogo", [])
 
-            if any(item["prodId"] == codice_articolo for item in catalogo):
-                # Articolo già presente
+            if any(item.get("prodId") == codice_articolo for item in catalogo):
+                errors.append({"Codice Articolo": codice_articolo, "Reason": "Duplicate entry found."})
+                error_count += 1
                 continue
 
-            dashboard_elements = family.get("dashboard", {}).get("elements", [])
-            elements = [{} for _ in dashboard_elements]
-
-            catalog_item = {
+            elements = [{} for _ in family.get("dashboard", {}).get("elements", [])]
+            catalogo.append({
                 "_id": ObjectId(),
                 "prodId": codice_articolo,
                 "prodotto": descrizione_articolo,
                 "descrizione": "",
                 "famiglia": famiglia_di_prodotto,
                 "elements": elements,
-            }
-            catalogo.append(catalog_item)
-            family["catalogo"] = catalogo
-            family_dict[famiglia_di_prodotto] = family
-            processed_articoli.append(codice_articolo)
+            })
             success_count += 1
+            processed_articoli.append(codice_articolo)
 
         for famiglia, family in family_dict.items():
             try:
                 collection.update_one(
-                    {"_id": family["_id"]}, {"$set": {"catalogo": family["catalogo"]}}
+                    {"_id": family["_id"]}, {"$set": {"catalogo": family.get("catalogo", [])}}
                 )
             except Exception as e:
                 errors.append({
@@ -942,30 +917,19 @@ class MainWindow(QMainWindow):
 
         summary_message = f"{success_count} articoli processed successfully, {error_count} errors."
         if errors:
-            error_messages = "\n".join([
-                f"{error.get('Codice Articolo', error.get('Famiglia di prodotto'))}: {error['Reason']}"
-                for error in errors
-            ])
-            QMessageBox.information(
-                self, "Processing Summary", summary_message + "\nErrors:\n" + error_messages
-            )
+            error_messages = "\n".join([f"{error.get('Codice Articolo', error.get('Famiglia di prodotto'))}: {error['Reason']}" for error in errors])
+            QMessageBox.information(self, "Processing Summary", summary_message + "\nErrors:\n" + error_messages)
         else:
             QMessageBox.information(self, "Processing Summary", summary_message)
 
-        report_message = "Articoli Upload Report:\n\n"
-        report_message += summary_message + "\n\n"
-
+        report_message = "Articoli Upload Report:\n\n" + summary_message + "\n\n"
         if processed_articoli:
-            report_message += "Successfully processed articoli:\n"
-            report_message += "\n".join(processed_articoli) + "\n\n"
-
+            report_message += "Successfully processed articoli:\n" + "\n".join(processed_articoli) + "\n\n"
         if errors:
-            report_message += "Errors encountered:\n"
-            for error in errors:
-                error_detail = f"{error.get('Codice Articolo', error.get('Famiglia di prodotto'))}: {error['Reason']}"
-                report_message += error_detail + "\n"
+            report_message += "Errors encountered:\n" + "\n".join([f"{error.get('Codice Articolo', error.get('Famiglia di prodotto'))}: {error['Reason']}" for error in errors])
 
         save_report_to_file(report_message, "articoli")
+
 
     def wipe_database(self):
         print("Attempting to wipe database...")

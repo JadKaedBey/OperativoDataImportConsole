@@ -16,7 +16,7 @@ def custom_list_parser2(cell_value):
         print("sono qui")
         return []
     
-    if cell_value.strip()=='':
+    if cell_value.strip() == '':
         return []
 
     text = cell_value.strip()
@@ -65,10 +65,12 @@ def create_json_for_flowchart(df, codice, descrizione):
     Crea un oggetto JSON pronto per il DB partendo dal DataFrame `df`,
     cercando di convertire i valori ricevuti nel tipo desiderato.
     Se non è possibile convertire un valore, solleva ValueError.
+    
+    Nota: se è presente la colonna "D. fase", per ogni fase verrà aggiunto
+    il campo "phaseDescription" (contenuto convertito in stringa) con il testo presente.
     """
 
     # 1) Tenta di convertire 'codice' e 'descrizione' a stringa.
-    #    Se fallisce, solleva ValueError.
     try:
         codice = str(codice)
     except Exception:
@@ -82,6 +84,9 @@ def create_json_for_flowchart(df, codice, descrizione):
     elements = {}
     connections = {}
 
+    # Verifichiamo se la colonna "D. fase" esiste (opzionale)
+    has_phase_description = "D. fase" in df.columns
+
     # Scorriamo le righe del DataFrame
     for i, row in df.iterrows():
 
@@ -94,7 +99,7 @@ def create_json_for_flowchart(df, codice, descrizione):
                 f"trovato: {row['FaseOperativo']} di tipo {type(row['FaseOperativo'])}"
             )
 
-        # 3) Convertiamo "Tempo Ciclo" a int (tramite float), perché in seguito lo usiamo come int
+        # 3) Convertiamo "Tempo Ciclo" a int (tramite float)
         try:
             tempo_ciclo = int(float(row["Tempo Ciclo"]))
         except Exception:
@@ -115,11 +120,17 @@ def create_json_for_flowchart(df, codice, descrizione):
 
         phase_key = str(id_fase_int)
 
+        # Se la colonna "D. fase" è presente e il valore non è NaN, lo convertiamo in stringa
+        phase_desc = None
+        if has_phase_description:
+            if pd.notna(row["D. fase"]):
+                phase_desc = str(row["D. fase"])
+
         try:
             next_ids_raw = custom_list_parser2(row["ID fase successiva"])
         except Exception as e:
             raise ValueError(
-                f"Riga {i}: 'ID fase successiva' non è in un formato gestibile dalla funzione custom_list_parser {e}."
+                f"Riga {i}: 'ID fase successiva' non è in un formato gestibile dalla funzione custom_list_parser: {e}."
             )
 
         try:
@@ -129,14 +140,14 @@ def create_json_for_flowchart(df, codice, descrizione):
                 f"Riga {i}: 'Fase successiva' non è in un formato gestibile dalla funzione custom_list_parser."
             )
 
-        # Se vuoi convertire i next_ids in interi e next_phases in stringhe, lo fai qui:
+        # Convertiamo i next_ids e next_phases in stringhe
         next_ids = []
         for val in next_ids_raw:
             try:
                 next_ids.append(str(val))
             except Exception:
                 raise ValueError(
-                    f"Riga {i}: impossibile convertire '{val}' in int per 'ID fase successiva '."
+                    f"Riga {i}: impossibile convertire '{val}' in stringa per 'ID fase successiva'."
                 )
 
         next_phases = []
@@ -145,7 +156,7 @@ def create_json_for_flowchart(df, codice, descrizione):
                 next_phases.append(str(val))
             except Exception:
                 raise ValueError(
-                    f"Riga {i}: impossibile convertire '{val}' in str per 'Fase successiva'."
+                    f"Riga {i}: impossibile convertire '{val}' in stringa per 'Fase successiva'."
                 )
 
         # Creiamo un ObjectId per l'elemento
@@ -173,12 +184,15 @@ def create_json_for_flowchart(df, codice, descrizione):
             "next": [],
             "phaseDuration": tempo_ciclo,
         }
+        # Se presente, aggiungiamo il campo "phaseDescription"
+        if phase_desc is not None:
+            elements[phase_key]["phaseDescription"] = phase_desc
 
-        # Prepara le connessioni (non ancora collegate ai loro oggetti)
+        # Prepara le connessioni (non ancora collegate agli oggetti)
         for nid, nphase in zip(next_ids, next_phases):
             connections.setdefault(phase_key, []).append((str(nid), nphase))
 
-    # Adesso colleghiamo le "next" relazioni
+    # Colleghiamo le relazioni "next"
     dashboard_elements = []
     for phase_id, element in elements.items():
         for next_id, _ in connections.get(phase_id, []):
@@ -227,7 +241,6 @@ def create_json_for_flowchart(df, codice, descrizione):
         },
     }
     return json_output
-
 
 def safe_parse_literal(cell):
     try:
